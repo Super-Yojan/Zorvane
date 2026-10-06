@@ -53,10 +53,13 @@ python3 -m pip install -r simulator/tools/requirements.txt
 python3 simulator/tools/zenoh_client.py --rover 0 drive --linear 0.4 --angular 0 --seconds 2
 ```
 
-`TERRA_TILES=1` loads the real-elevation patch. `TERRA_ROVER_COUNT` sets the
-fleet size (0 through 32). `ZORVANE_VEHICLE` selects a registered body and
-defaults to `terra-ground`. `ZORVANE_ASSETS` overrides the asset root
-(default `simulator/assets`).
+`TERRA_TILES=1` loads the real-elevation patch. `TERRA_NEXT=1` loads the NEXT
+competition practice pitch instead, with Zatara (spawn slot 0 on the
+`terra-ground` body), tennis balls, and deposit buckets. See
+[simulator/NEXT.md](simulator/NEXT.md). `TERRA_ROVER_COUNT` sets the fleet size
+(0 through 32). `ZORVANE_VEHICLE` selects a registered body and defaults to
+`terra-ground`. `ZORVANE_ASSETS` overrides the asset root (default
+`simulator/assets`).
 
 World layout and tile variables: [simulator/WORLD.md](simulator/WORLD.md).
 
