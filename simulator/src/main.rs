@@ -17,7 +17,6 @@ use depth_camera::TerraDepthCameraPlugin;
 use physics::TerraPhysicsPlugin;
 use terra::TerraPlugin;
 use world::TerraWorldPlugin;
-use zorvane_vehicle::VehicleBody;
 
 fn asset_root() -> String {
     std::env::var("ZORVANE_ASSETS")

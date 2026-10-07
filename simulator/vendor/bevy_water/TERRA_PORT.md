@@ -17,6 +17,10 @@ Changes:
 - Omit upstream example-only development dependencies from the active manifest.
 - Make the material binding mutable in `src/water.rs` for Bevy 0.19's mutable
   asset wrapper.
+- In `src/image_utils.rs`, use `MipmapFilterMode` (wgpu 29) and copy the cubemap
+  layer count before the mutable reinterpret. Rust 1.99 rejects the previous
+  overlapping borrow. Zorvane does not enable the `image_utils` feature; this
+  keeps that module building if it is turned on.
 
 Terra enables only `embed_shaders`. The optional easing and inspector integrations
 retain their upstream versions and are not validated for Bevy 0.19. Do not enable
