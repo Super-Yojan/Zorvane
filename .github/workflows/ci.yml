@@ -32,12 +32,31 @@ jobs:
             mesa-vulkan-drivers python3 python3-venv
 
       # A parallel Bevy link can exceed the GitHub-hosted runner memory.
+      # Hosted images sometimes already have /swapfile active. fallocate on that
+      # path fails with "Text file busy", so skip when swap is already large and
+      # otherwise add a second file.
       - name: Add swap
         run: |
-          sudo fallocate -l 16G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          set -euo pipefail
+          have_kib=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)
+          echo "SwapTotal=${have_kib:-0} kB"
+          swapon --show || true
+          # 12 GiB is enough headroom for the Bevy link on a hosted runner.
+          if [ "${have_kib:-0}" -ge $((12 * 1024 * 1024)) ]; then
+            echo "Existing swap is already sufficient."
+            exit 0
+          fi
+          swapfile=/swapfile2
+          if swapon --show=NAME --noheadings | grep -qx "$swapfile"; then
+            echo "$swapfile is already active."
+            exit 0
+          fi
+          sudo rm -f "$swapfile"
+          sudo fallocate -l 16G "$swapfile"
+          sudo chmod 600 "$swapfile"
+          sudo mkswap "$swapfile"
+          sudo swapon "$swapfile"
+          swapon --show
 
       - name: Python client tests
         run: |
