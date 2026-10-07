@@ -3,6 +3,7 @@
 use crate::physics::{RoverBody, RoverPhysicsConfig};
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use zorvane_vehicle::VehicleBody;
 
 #[derive(Default)]
 pub struct TerraPlugin {
@@ -43,18 +44,26 @@ pub struct DriveConfig {
 
 impl Default for DriveConfig {
     fn default() -> Self {
-        Self {
-            wheel_radius: 0.15,
-            track_width: 0.6,
-            max_wheel_speed: 20.0,
-            keyboard_linear_speed: 1.5,
-            keyboard_angular_speed: 1.5,
-            model_path: "models/rover.glb".into(),
-        }
+        Self::from_body(&zorvane_vehicle::TerraGround).expect("Terra ground drive is valid")
     }
 }
 
 impl DriveConfig {
+    pub fn from_body(body: &dyn VehicleBody) -> Result<Self, &'static str> {
+        let locomotion = body.locomotion();
+        let drive = locomotion.differential()?;
+        let config = Self {
+            wheel_radius: drive.wheel_radius_m,
+            track_width: drive.track_width_m,
+            max_wheel_speed: drive.max_wheel_speed_rad_s,
+            keyboard_linear_speed: drive.keyboard_linear_speed,
+            keyboard_angular_speed: drive.keyboard_angular_speed,
+            model_path: body.visual().asset_path.to_owned(),
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         if [self.wheel_radius, self.track_width, self.max_wheel_speed]
             .iter()
@@ -197,6 +206,7 @@ pub(crate) fn reconcile_fleet(
     physics: Res<RoverPhysicsConfig>,
     mut fleet: ResMut<RoverFleet>,
     world: Option<Res<crate::world::WorldConfig>>,
+    vehicles: Option<Res<crate::vehicle::Vehicles>>,
     rovers: Query<(Entity, &RoverId, &RoverSlot, &Transform), With<Rover>>,
 ) {
     let mut existing: Vec<_> = rovers.iter().collect();
@@ -247,8 +257,12 @@ pub(crate) fn reconcile_fleet(
             .next_id
             .checked_add(1)
             .expect("rover ID space exhausted");
+        let label = vehicles
+            .as_ref()
+            .map(|vehicles| vehicles.0.active().display_name())
+            .unwrap_or(zorvane_vehicle::TerraGround.display_name());
         let mut rover = commands.spawn((
-            Name::new(format!("Terra {}", id.0)),
+            Name::new(format!("{label} {}", id.0)),
             Rover,
             id,
             RoverSlot(slot),
@@ -512,5 +526,35 @@ mod tests {
             .collect();
         assert_eq!(positions.len(), 2);
         assert!(positions[0].distance(positions[1]) >= 1.4);
+    }
+
+    struct NotARover;
+
+    impl zorvane_vehicle::VehicleBody for NotARover {
+        fn id(&self) -> &'static str {
+            "not-a-rover"
+        }
+        fn display_name(&self) -> &'static str {
+            "Not a rover"
+        }
+        fn visual(&self) -> zorvane_vehicle::VehicleVisual {
+            zorvane_vehicle::VehicleVisual {
+                asset_path: "models/missing.glb",
+            }
+        }
+        fn chassis(&self) -> zorvane_vehicle::ChassisSpec {
+            zorvane_vehicle::TerraGround.chassis()
+        }
+        fn locomotion(&self) -> zorvane_vehicle::Locomotion {
+            zorvane_vehicle::Locomotion::Unsupported {
+                reason: "no actuators yet",
+            }
+        }
+    }
+
+    #[test]
+    fn only_differential_drive_bodies_become_a_drive_config() {
+        assert!(DriveConfig::from_body(&NotARover).is_err());
+        assert!(DriveConfig::from_body(&zorvane_vehicle::TerraGround).is_ok());
     }
 }

@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+members = ["simulator", "crates/zorvane-vehicle"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+zorvane-vehicle = { path = "crates/zorvane-vehicle" }
+# Shared robotics crates stay in Terra (TerraPhone and the Pi still compile them).
+# Pinned to the Terra main commit this extraction was taken from.
+terra-transport = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
+terra-autonomy = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
+terra-navigation = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
+terra-experiment = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
+terra-mapping = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
+terra-types = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
+terra-state = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
+terra-control = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
+terra-waypoint = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,35 +1,28 @@
 [package]
-name = "simulator"
-version = "0.1.0"
-edition = "2024"
+name = "zorvane"
+version.workspace = true
+edition.workspace = true
+description = "Zorvane world and competition simulator"
+publish = false
 
 [dependencies]
-terra-transport = { path = "../crates/terra-transport" }
-terra-autonomy = { path = "../crates/terra-autonomy" }
-terra-navigation = { path = "../crates/terra-navigation" }
-terra-experiment = { path = "../crates/terra-experiment" }
-terra-mapping = { path = "../crates/terra-mapping" }
-terra-types = { path = "../crates/terra-types" }
-terra-state = { path = "../crates/terra-state" }
-terra-control = { path = "../crates/terra-control" }
-terra-waypoint = { path = "../crates/terra-waypoint" }
-bevy = {version="0.19.1", features=["bevy_scene", "bevy_gltf"]}
+zorvane-vehicle.workspace = true
+terra-transport.workspace = true
+terra-autonomy.workspace = true
+terra-navigation.workspace = true
+terra-experiment.workspace = true
+terra-mapping.workspace = true
+terra-types.workspace = true
+terra-state.workspace = true
+terra-control.workspace = true
+terra-waypoint.workspace = true
+bevy = { version = "0.19.1", features = ["bevy_scene", "bevy_gltf"] }
 bevytiles = "0.1.0"
 bevy_water = { path = "vendor/bevy_water", default-features = false, features = ["embed_shaders"] }
-avian3d = { git = "https://github.com/avianphysics/avian", branch = "main" }
+avian3d = { git = "https://github.com/avianphysics/avian", rev = "af7e99c5c1da386aaa2b4c330e2adc96fa7ca6eb" }
 bevy_voxel_world = "=0.17.0"
 bevy_procedural_tree = "=0.4.0"
 fastrand = "2.3"
 zenoh = { version = "1.10.1", default-features = false, features = ["transport_tcp"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-
-
-
-# Enable a small amount of optimization in the dev profile.
-[profile.dev]
-opt-level = 1
-
-# Enable a large amount of optimization in the dev profile for dependencies.
-[profile.dev.package."*"]
-opt-level = 3

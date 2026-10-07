@@ -1,6 +1,7 @@
 //! Avian chassis approximation: dynamic body with yaw free and roll/pitch locked.
 use avian3d::prelude::*;
 use bevy::prelude::*;
+use zorvane_vehicle::VehicleBody;
 
 pub struct TerraPhysicsPlugin;
 
@@ -22,15 +23,26 @@ pub struct RoverPhysicsConfig {
 
 impl Default for RoverPhysicsConfig {
     fn default() -> Self {
-        Self {
-            chassis_size: Vec3::new(0.9, 0.16, 0.8),
-            mass_kg: 20.0,
-            model_scale: 0.025,
-        }
+        Self::from_body(&zorvane_vehicle::TerraGround).expect("Terra ground chassis is valid")
     }
 }
 
 impl RoverPhysicsConfig {
+    pub fn from_body(body: &dyn VehicleBody) -> Result<Self, &'static str> {
+        let chassis = body.chassis();
+        let config = Self {
+            chassis_size: Vec3::new(
+                chassis.size_xyz[0],
+                chassis.size_xyz[1],
+                chassis.size_xyz[2],
+            ),
+            mass_kg: chassis.mass_kg,
+            model_scale: chassis.visual_scale,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         if !self.chassis_size.is_finite()
             || self.chassis_size.min_element() <= 0.0

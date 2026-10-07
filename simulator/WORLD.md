@@ -1,4 +1,9 @@
-# Terra world
+# Zorvane world
+
+This world simulator moved out of Terra. Run it from the Zorvane repository
+root with `cargo run -p zorvane`. `TERRA_*` environment variables and the
+`terra/rover/…` Zenoh keys are unchanged. The chassis is the `terra-ground`
+vehicle; see [VEHICLES.md](../VEHICLES.md).
 
 `TerraWorldPlugin::default()` creates a 100 m square practice environment:
 
@@ -145,10 +150,11 @@ From the repository root:
 
 ```sh
 cargo build --workspace
-cargo build --manifest-path simulator/Cargo.toml
+cargo run -p zorvane
 ```
 
-The simulator is excluded from the workspace, so both commands are required. `cargo run` below rebuilds the simulator if sources changed.
+`cargo build --workspace` builds the simulator and the vehicle seam. `cargo run`
+inside `simulator/` is the same binary.
 
 ### Default world
 
@@ -246,7 +252,6 @@ From the repository root:
 
 ```sh
 cargo test --workspace
-cargo test --manifest-path simulator/Cargo.toml
 python3 -m unittest discover -s simulator/tools -p 'test_*.py'
 ```
 

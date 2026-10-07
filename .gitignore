@@ -1,0 +1,7 @@
+/target/
+simulator/target/
+simulator/.cache/
+simulator/runs/
+.DS_Store
+*.swp
+.venv/
