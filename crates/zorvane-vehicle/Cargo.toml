@@ -1,0 +1,8 @@
+[package]
+name = "zorvane-vehicle"
+version.workspace = true
+edition.workspace = true
+description = "Vehicle-body seam for the Zorvane simulator"
+publish = false
+
+[dependencies]
