@@ -1,7 +1,27 @@
 # Vehicle bodies
 
-Zorvane spawns whatever body is selected. It does not own Terra's chassis
-dimensions, wheel geometry, or visual mesh.
+**TL;DR.** `ZORVANE_VEHICLE` picks a registered body. The default is `terra-ground`. The town and the Zenoh keys stay shared.
+
+```mermaid
+flowchart LR
+  Env["ZORVANE_VEHICLE"] --> Reg["VehicleRegistry"]
+  Reg --> Body["VehicleBody"]
+  Body --> Mesh["glTF"]
+  Body --> Box["chassis"]
+  Body --> Loco["locomotion"]
+  Loco --> Drive["DifferentialDrive"]
+  Loco --> Later["Unsupported"]
+  Drive --> Wheels["wheel controller"]
+  Later --> Stop["startup stops"]
+```
+
+*Differential drive becomes wheel speeds. Anything else stops the process and prints the reason.*
+
+![terra-ground in the practice town](docs/assets/town.png)
+
+*Built-in body. `rover.glb`, a cuboid collider, and differential drive.*
+
+Zorvane spawns the selected body. Chassis size, wheel geometry, and the mesh come from that body.
 
 ## Seam
 

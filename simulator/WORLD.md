@@ -1,11 +1,14 @@
 # Zorvane world
 
-This world simulator moved out of Terra. Run it from the Zorvane repository
-root with `cargo run -p zorvane`. `TERRA_*` environment variables and the
-`terra/rover/…` Zenoh keys are unchanged. The chassis is the `terra-ground`
-vehicle; see [VEHICLES.md](../VEHICLES.md).
+**TL;DR.** Default is a 100 m town. `TERRA_TILES=1` loads elevation. `TERRA_NEXT=1` loads the practice pitch. Run `cargo run -p zorvane` from the repo root.
 
-`TerraWorldPlugin::default()` creates a 100 m square practice environment:
+![Practice town](../docs/assets/town.png)
+
+*Default world. The rover starts at the intersection. Orange posts mark the 100 m square.*
+
+The chassis is [`terra-ground`](../VEHICLES.md). Zenoh keys stay `terra/rover/…`. See [ZENOH.md](ZENOH.md).
+
+`TerraWorldPlugin::default()` builds that town:
 
 - Two connected roads with dashed lane markings, sidewalks and crosswalks.
 - Twelve buildings with seeded heights, windows and doors.
@@ -13,15 +16,15 @@ vehicle; see [VEHICLES.md](../VEHICLES.md).
 - A small animated pond with stone borders.
 - Voxel hills around the outside of the map.
 
-The first rover starts at the clear intersection. Additional rovers spawn along
-the roads; see [ZENOH.md](ZENOH.md) for configurable fleet size and remote control. Buildings, tree trunks, pond borders
-and voxel hill meshes have static Avian colliders. Roads sit on the flat ground
-collider. Leaves and branches are visual geometry; water has no buoyancy model.
-The pond is a surface over the flat ground, rather than an excavated basin.
+The first rover starts at the clear intersection. Extra rovers spawn along the roads. See [ZENOH.md](ZENOH.md).
 
-`TERRA_NEXT=1` replaces this town with the NEXT competition practice pitch
-(soccer field, tennis balls, deposit buckets, and Zatara in spawn slot 0 on
-the `terra-ground` body). See [NEXT.md](NEXT.md).
+Buildings, trunks, pond borders, and hills have colliders. Roads sit on the flat ground collider. Leaves are visual only. The pond has no buoyancy.
+
+`TERRA_NEXT=1` replaces the town with the practice pitch. Zatara is spawn slot 0 on `terra-ground`. See [NEXT.md](NEXT.md).
+
+![NEXT practice pitch](../docs/assets/next.png)
+
+*Same binary. Different world. Six balls, two buckets.*
 
 ## Configuration
 
@@ -66,6 +69,10 @@ Identical seeds reproduce building heights, tree placement, meshes, and hills.
   collider without a network.
 
 ## Real-world tiles
+
+![Terrarium tile patch](../docs/assets/tiles.png)
+
+*Default anchor, fetch off. Colour tracks height. Grey boxes are steep cells.*
 
 `TERRA_TILES=1` replaces the practice town with a square of real elevation. The
 flat world stays the default, and a failed load prints the reason and continues

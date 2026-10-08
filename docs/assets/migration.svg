@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 340" width="760" height="340" role="img" aria-labelledby="title desc">
+  <title id="title">What stayed in Terra and what moved to Zorvane</title>
+  <desc id="desc">Phone, motors, and shared crates stay in Terra. The world, Zenoh bridge, and terra-ground body live in Zorvane.</desc>
+  <rect width="760" height="340" fill="#f4f7f6"/>
+  <rect x="28" y="56" width="300" height="250" rx="14" fill="#ffffff" stroke="#99f6e4" stroke-width="2"/>
+  <rect x="432" y="56" width="300" height="250" rx="14" fill="#ffffff" stroke="#5eead4" stroke-width="2"/>
+  <text x="48" y="40" font-family="ui-sans-serif, system-ui, sans-serif" font-size="20" fill="#134e4a">Terra keeps</text>
+  <text x="452" y="40" font-family="ui-sans-serif, system-ui, sans-serif" font-size="20" fill="#134e4a">Zorvane takes</text>
+  <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" fill="#134e4a">
+    <text x="52" y="100">TerraPhone</text>
+    <text x="52" y="140">motors and actuators</text>
+    <text x="52" y="180">shared crates</text>
+    <text x="52" y="210" font-size="13" fill="#475569">types, control, waypoint,</text>
+    <text x="52" y="230" font-size="13" fill="#475569">transport, autonomy</text>
+    <text x="52" y="270">Pi rover</text>
+    <text x="456" y="100">town, tiles, NEXT pitch</text>
+    <text x="456" y="140">Zenoh bridge</text>
+    <text x="456" y="180">terra-ground body</text>
+    <text x="456" y="220">cameras and physics</text>
+    <text x="456" y="270" font-size="13" fill="#475569">same keys: terra/rover</text>
+  </g>
+  <path d="M336 180 H416" stroke="#0f766e" stroke-width="3" fill="none"/>
+  <path d="M404 170 L424 180 L404 190" fill="#0f766e"/>
+</svg>

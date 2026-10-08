@@ -1,11 +1,32 @@
 # API
 
-Rustdoc for the vehicle seam is published with the site:
+!!! tip "TL;DR"
+    Published rustdoc is one crate: `zorvane-vehicle`.
+    It has no dependencies.
+    The simulator binary is not in that rustdoc.
 
-[zorvane-vehicle](https://super-yojan.dev/Zorvane/api/zorvane_vehicle/index.html)
+```mermaid
+flowchart TD
+  Reg["VehicleRegistry"] --> Body["VehicleBody"]
+  Body --> Terra["TerraGround<br/>terra-ground"]
+  Body --> Box["ChassisSpec"]
+  Body --> Loco["Locomotion"]
+  Loco --> Diff["DifferentialDrive"]
+  Loco --> Later["Unsupported"]
+```
 
-The docs workflow runs `cargo doc --locked --no-deps -p zorvane-vehicle` and copies `target/doc` to `/api/` on the site. That crate has no dependencies. The public surface is `VehicleBody`, `VehicleRegistry`, `TerraGround`, `ChassisSpec`, `Locomotion`, and `DifferentialDriveSpec`.
+*Select a body. This build can drive `DifferentialDrive` only.*
 
-The `zorvane` package is a binary. Its modules are private to the simulator, and generating rustdoc for it compiles Bevy, Avian, and the Terra git crates. The docs workflow leaves that crate out. Behavior of the world and the bridge is documented in these pages and covered by `cargo test --workspace`.
+[Open zorvane-vehicle rustdoc](https://super-yojan.dev/Zorvane/api/zorvane_vehicle/index.html)
+
+The docs workflow runs:
+
+```sh
+cargo doc --locked --no-deps -p zorvane-vehicle
+```
+
+It copies `target/doc` to `/api/` on the site.
+
+The `zorvane` package is a binary. Its modules stay private. Documenting it would compile Bevy and the Terra git crates, so the docs job skips it.
 
 How to add a body: [Vehicle bodies](reference/vehicles.md).

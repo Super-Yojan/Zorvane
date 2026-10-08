@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" width="720" height="300" role="img" aria-labelledby="title desc">
+  <title id="title">Depth camera mount</title>
+  <desc id="desc">The depth camera sits just ahead of the rover and looks forward along a 60 degree wedge.</desc>
+  <rect width="720" height="300" fill="#f4f7f6"/>
+  <text x="28" y="40" font-family="ui-sans-serif, system-ui, sans-serif" font-size="22" fill="#134e4a">Depth camera</text>
+  <line x1="36" y1="230" x2="684" y2="230" stroke="#94a3b8" stroke-width="3"/>
+  <text x="36" y="256" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" fill="#475569">ground</text>
+  <rect x="70" y="178" width="150" height="48" rx="6" fill="#0f766e"/>
+  <text x="108" y="208" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" fill="#f8fafc">rover</text>
+  <rect x="208" y="156" width="22" height="16" rx="2" fill="#115e59"/>
+  <polygon points="230,164 520,70 520,250" fill="#14b8a6" fill-opacity="0.28" stroke="#0f766e" stroke-width="2"/>
+  <text x="330" y="168" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" fill="#134e4a">60° vertical</text>
+  <text x="330" y="192" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" fill="#134e4a">0.0530 m</text>
+  <text x="70" y="286" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#334155">Mount: 0.20 m up, 0.05 m ahead of the chassis, facing local Z.</text>
+</svg>

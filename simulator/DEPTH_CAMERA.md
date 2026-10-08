@@ -1,13 +1,18 @@
 # Terra front depth camera
 
-`TerraDepthCameraPlugin` is registered in `main.rs`. It mounts one sensor as a
-child of each newly spawned `Rover`, ahead of the chassis front face, facing the
-rover's local -Z direction. The mount uses metres and is independent of GLB scale.
+**TL;DR.** One depth sensor per rover. 256×192. 60° vertical. Range 0.05–30 m. Bright preview means near.
 
-Defaults: 256 × 192 pixels, 60° vertical field of view, 0.05–30 metre range,
-0.2 metres above the body origin and 0.05 metres ahead of the chassis.
-A grayscale preview appears at the lower right: nearby surfaces are bright;
-faraway surfaces and missing returns are dark. WASD drives the rover and Space stops it.
+![Depth camera mount](../docs/assets/camera.svg)
+
+*Just ahead of the chassis, looking along local −Z.*
+
+![Town, with the depth preview at the lower right](../docs/assets/town.png)
+
+*Windowed town. The lower-right square is the depth preview for rover 0.*
+
+`TerraDepthCameraPlugin` is registered in `main.rs`. It mounts one sensor on each new rover. The mount is in metres and ignores GLB scale.
+
+WASD drives when Zenoh is off. Space stops.
 
 Configure the sensor when adding the plugin:
 

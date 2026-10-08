@@ -10,8 +10,13 @@ Zorvane is the platform-agnostic world and competition simulator extracted from
 is the fleet operator. This repo is the world: terrain, physics, cameras, and
 the Zenoh bridge those operators already speak.
 
-The Terra ground rover still runs here. It is the `terra-ground` vehicle, not
-geometry baked into the world. See [VEHICLES.md](VEHICLES.md).
+![Practice town](docs/assets/town.png)
+
+*Default world. The body is [`terra-ground`](VEHICLES.md).*
+
+![NEXT pitch](docs/assets/next.png)
+
+*`TERRA_NEXT=1`. See [simulator/NEXT.md](simulator/NEXT.md).*
 
 ## Run
 
@@ -52,6 +57,10 @@ TERRA_HEADLESS=1 TERRA_ZENOH=0 cargo run -p zorvane
 Leave the process running and drive rover 0 from another terminal. Topics are
 unchanged (`terra/rover/<id>/cmd_vel`, `goal`, cameras, fleet). See
 [simulator/ZENOH.md](simulator/ZENOH.md).
+
+![Driving on the NEXT pitch](docs/assets/drive.gif)
+
+*Forward motion with Zenoh off. The same twist is `cmd_vel` when Zenoh is on.*
 
 ```sh
 python3 -m pip install -r simulator/tools/requirements.txt

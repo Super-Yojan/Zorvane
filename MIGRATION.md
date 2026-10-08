@@ -1,8 +1,12 @@
 # Terra follow-up after Zorvane
 
-Zorvane now contains the world simulator. This file is the delete-and-retarget
-list for a Terra pull request. Do not delete the shared robotics crates: TerraPhone,
-the Pi rover, and Zorvane's git dependencies still compile them from Terra.
+**TL;DR.** Delete Terra's `simulator/` and simulator `docker/`. Keep TerraPhone, the Pi, and the shared crates. Point world docs here.
+
+![What stays in Terra and what moved](docs/assets/migration.svg)
+
+*Same Zenoh prefix on both sides of the arrow.*
+
+This file is the delete-and-retarget list for a Terra pull request. Do not delete the shared robotics crates. TerraPhone, the Pi rover, and Zorvane's git dependencies still compile them from Terra.
 
 Zorvane pins those crates to Terra `d0c34872e70cfe05750eef0662c4d8a58cd51889`
 (`main` at extraction). After the Terra cleanup, bump that rev in Zorvane's
@@ -83,6 +87,10 @@ are unchanged. Camera packets are unchanged.
 
 New in Zorvane only: `ZORVANE_VEHICLE` (default `terra-ground`), `ZORVANE_ASSETS`,
 `ZORVANE_SMOKE=1` (exit after the world schedule starts).
+
+![NEXT pitch, already in Zorvane](docs/assets/next.png)
+
+*The practice pitch runs here. Leave Terra PR #24 unmerged.*
 
 ## Competition field (Terra #21 / PR #24)
 

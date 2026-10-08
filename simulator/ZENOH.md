@@ -1,9 +1,25 @@
 # Terra fleet, camera frames, and Zenoh control
 
-Zorvane keeps this contract. The default prefix is still `terra/rover`.
-TerraPhone and ARGOS do not need new keys. Terra's
-[mission-autonomy guide](https://github.com/Super-Yojan/Terra/blob/main/docs/autonomy/README.md)
-still describes the shared arbiter; that document stayed in the Terra repo.
+**TL;DR.** Prefix `terra/rover`. One peer on `tcp/127.0.0.1:7447`. No router. TerraPhone and ARGOS keep their keys.
+
+```mermaid
+flowchart LR
+  Phone["TerraPhone"] --> Bus["terra/rover"]
+  ARGOS["ARGOS"] --> Bus
+  Py["Python client"] --> Bus
+  Bus --> In["cmd_vel, goal, fleet/size"]
+  In --> Bridge["Zorvane bridge"]
+  Bridge --> Out["cameras, goal/status, fleet/state"]
+  Out --> Bus
+```
+
+*Commands go in. Camera frames and status come back. Same prefix on a real rover.*
+
+![Driving from a client](../docs/assets/drive.gif)
+
+*Rover 0 on the NEXT pitch. A `cmd_vel` stream, or the keyboard when Zenoh is off.*
+
+Terra's [mission-autonomy guide](https://github.com/Super-Yojan/Terra/blob/main/docs/autonomy/README.md) still describes the shared arbiter. That document stayed in Terra.
 
 The simulator starts one rover by default. Choose an initial count from 0 through
 32 with `TERRA_ROVER_COUNT`:
@@ -212,6 +228,10 @@ bridge is:
 - Add `encode_goal` for the three bodies above, with the same 2048-byte cap as `encode_twist`.
 - Add a CLI (and later a supervisor call) that publishes **once**, then watches `goal/status` until `goal_id` advances and `state` is `arrived`. Do not refresh the goal at 20 Hz.
 - Leave `cmd_vel` / `encode_twist` marked as the debug path. A latched Terra goal ignores twists until `{"cancel":true}`.
+
+![Frame packet](../docs/assets/frame.svg)
+
+*UTF-8 JSON, one newline, then contiguous pixels.*
 
 A frame packet is a UTF-8 JSON header, a single newline byte, then contiguous
 pixel bytes. The header contains:
