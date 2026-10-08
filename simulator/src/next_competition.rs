@@ -542,8 +542,8 @@ mod tests {
         );
         assert_eq!(physics.mass_kg, chassis.mass_kg);
         let drive = world.resource::<DriveConfig>();
-        let spec = ground
-            .locomotion()
+        let locomotion = ground.locomotion();
+        let spec = locomotion
             .differential()
             .expect("terra-ground differential drive");
         assert_eq!(drive.wheel_radius, spec.wheel_radius_m);
