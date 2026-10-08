@@ -31,7 +31,7 @@ Root `.gitignore` entries that only cover the simulator can go with it:
 
 | Path | Change |
 | --- | --- |
-| `README.md` | Remove the Bevy simulator overview, the Codespaces badge, and the `cargo test --manifest-path simulator/Cargo.toml` line. Point world/Zenoh/tile instructions at https://github.com/Super-Yojan/Zorvane. Keep the crate list (`terra-types` through `terra-mobile`) and the phone/Pi docs. |
+| `README.md` | Remove the Bevy simulator overview, the Codespaces badge, and the `cargo test --manifest-path simulator/Cargo.toml` line. Point world/Zenoh/tile instructions at https://github.com/Super-Yojan/Zorvane and https://super-yojan.dev/Zorvane/. Keep the crate list (`terra-types` through `terra-mobile`) and the phone/Pi docs. |
 | `docs/DEVELOP-WITHOUT-MAC.md` | This is the simulator desktop guide. Replace it with a short pointer to Zorvane's README, or delete it if the link in the README is enough. |
 | `docs/DOCKER.md` | Describes the simulator image. Delete or replace with a pointer to Zorvane. |
 | `docs/MOBILE_CONTROL.md` | Keep the phone contract. Replace "start the Bevy simulator" steps so they run Zorvane (`cargo run -p zorvane`, `TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447`). Keys stay `terra/rover/<id>/…`. |
@@ -87,20 +87,20 @@ New in Zorvane only: `ZORVANE_VEHICLE` (default `terra-ground`), `ZORVANE_ASSETS
 ## Competition field (Terra #21 / PR #24)
 
 Do not merge [Terra PR #24](https://github.com/Super-Yojan/Terra/pull/24) into
-Terra. It adds the NEXT practice pitch to the simulator, which now lives here.
-Retarget that work onto Zorvane (close or supersede the Terra PR).
+Terra. The NEXT practice pitch is already in this repo (Zorvane PR #2). Close
+or supersede the Terra PR. `TERRA_NEXT=1` loads the pitch, and the Zenoh rover-0
+path is unchanged.
 
-The PR branch is `cursor/next-zatara-field-c09a` at `5898c90a60d9485321bc4e60dd975fe7e7f1154c`.
-Files it touches:
+The port came from Terra branch `cursor/next-zatara-field-c09a`. The files here
+are:
 
-- `simulator/src/next_competition.rs` (new)
-- `simulator/NEXT.md` (new)
-- `simulator/src/main.rs`
-- `simulator/src/mission.rs`
-- `simulator/src/world.rs`
+- `simulator/src/next_competition.rs`
+- `simulator/NEXT.md`
+- `simulator/src/main.rs` (`next_competition::install`)
+- `simulator/src/mission.rs` (NEXT takes precedence over `TERRA_MISSION=1`)
+- `simulator/src/world.rs` (`WorldConfig::prepare_next_field`)
 - `simulator/WORLD.md`
-- `README.md` (one line; in Zorvane that note belongs in this README)
+- `README.md`
 
-`TERRA_NEXT=1` should keep working when the port lands so existing notes and
-the Zenoh rover-0 path stay valid. Zatara in that PR is still the `terra-ground`
-chassis in spawn slot 0, not a second vehicle type.
+Zatara is spawn slot 0 of the `terra-ground` chassis, not a second vehicle type.
+See [NEXT.md](simulator/NEXT.md).

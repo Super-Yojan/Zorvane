@@ -1,5 +1,9 @@
 /target/
 simulator/target/
+site/
+docs/reference/
+__pycache__/
+*.pyc
 simulator/.cache/
 simulator/runs/
 .DS_Store

@@ -1,0 +1,98 @@
+site_name: Zorvane
+site_description: World and competition simulator for Terra and ARGOS
+site_url: https://super-yojan.dev/Zorvane/
+repo_url: https://github.com/Super-Yojan/Zorvane
+repo_name: Super-Yojan/Zorvane
+docs_dir: docs
+copyright: >
+  <a href="https://super-yojan.dev">super-yojan.dev</a>
+  ·
+  <a href="https://super-yojan.dev/ARGOS/">ARGOS</a>
+  ·
+  <a href="https://super-yojan.dev/Terra/">Terra</a>
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - toc.follow
+    - search.suggest
+    - search.highlight
+
+extra:
+  social:
+    - icon: material/home
+      link: https://super-yojan.dev
+      name: super-yojan.dev
+    - icon: material/transit-connection-variant
+      link: https://super-yojan.dev/ARGOS/
+      name: ARGOS hub
+    - icon: material/car-side
+      link: https://super-yojan.dev/Terra/
+      name: Terra
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+
+hooks:
+  - mkdocs_hooks.py
+
+validation:
+  nav:
+    omitted_files: warn
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: ignore
+    unrecognized_links: warn
+
+nav:
+  - Overview: index.md
+  - Running: running.md
+  - Worlds:
+      - Which world: worlds.md
+      - Town and tiles: reference/world.md
+      - NEXT field: reference/next.md
+  - Vehicle bodies: reference/vehicles.md
+  - Zenoh: reference/zenoh.md
+  - Python client: python-client.md
+  - Depth camera: reference/depth-camera.md
+  - Migration from Terra: reference/migration.md
+  - API: api.md
+  - Repository README: reference/readme.md
+  - System:
+      - super-yojan.dev: https://super-yojan.dev
+      - ARGOS: https://super-yojan.dev/ARGOS/
+      - Terra: https://super-yojan.dev/Terra/

@@ -123,8 +123,9 @@ mode. Steep samples are the obstacles. There is no OSM road graph.
 ### Out of scope
 
 A full GIS stack, vector roads, global path planning, live satellite imagery,
-GPU-displaced terrain, and rebasing a multi-kilometre world. Occupancy over
-Zenoh remains Terra #4.
+GPU-displaced terrain, and rebasing a multi-kilometre world. The bridge does
+publish `terra/rover/<id>/map/occupancy` when a rover has a depth snapshot; see
+[ZENOH.md](ZENOH.md).
 
 ## Reproduce and test
 

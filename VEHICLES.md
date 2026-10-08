@@ -46,6 +46,74 @@ depends on the shared crates the bridge already called (`terra-waypoint`,
 `terra-control`, `terra-transport`, mapping, autonomy) via git, pinned to Terra
 commit `d0c34872e70cfe05750eef0662c4d8a58cd51889`.
 
+## Add a body
+
+Implement `VehicleBody` and register the value in `VehicleRegistry::from_id`
+before `select`. `from_env` reads `ZORVANE_VEHICLE` and defaults to
+`terra-ground`. Today `from_id` registers only `TerraGround`. An id that was
+not registered fails at startup with the list of ids that were.
+
+The visual path is relative to the asset root (`simulator/assets`, or
+`ZORVANE_ASSETS`). Put the glTF there. The chassis box is metres in the
+simulator frame: X right, Y up, Z depth. Differential drive treats local −Z as
+forward.
+
+```rust
+use zorvane_vehicle::{
+    ChassisSpec, DifferentialDriveSpec, Locomotion, VehicleBody, VehicleVisual,
+};
+
+struct ExampleRover;
+
+impl VehicleBody for ExampleRover {
+    fn id(&self) -> &'static str {
+        "example-rover"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Example"
+    }
+
+    fn visual(&self) -> VehicleVisual {
+        VehicleVisual {
+            asset_path: "models/example.glb",
+        }
+    }
+
+    fn chassis(&self) -> ChassisSpec {
+        ChassisSpec {
+            size_xyz: [0.9, 0.16, 0.8],
+            mass_kg: 20.0,
+            visual_scale: 1.0,
+        }
+    }
+
+    fn locomotion(&self) -> Locomotion {
+        Locomotion::DifferentialDrive(DifferentialDriveSpec {
+            wheel_radius_m: 0.15,
+            track_width_m: 0.6,
+            max_wheel_speed_rad_s: 20.0,
+            keyboard_linear_speed: 1.5,
+            keyboard_angular_speed: 1.5,
+        })
+    }
+}
+```
+
+`main` turns the active body into `DriveConfig` and `RoverPhysicsConfig`. A
+differential-drive body uses the existing wheel controller, cameras, and Zenoh
+bridge. Size, mass, and visual scale must be finite and positive. Wheel radius,
+track width, and the wheel speed limit must be finite and positive.
+
+`Locomotion::Unsupported { reason }` is the hole for a body this build cannot
+actuate. The registry accepts it. `DriveConfig::from_body` returns `reason`,
+and the process aborts with `vehicle '<id>' cannot be driven by this Zorvane
+build: <reason>`. The unit test `placeholder-drone` uses that variant and is
+not registered for `ZORVANE_VEHICLE`. A later drone, or a Terra import, adds a
+locomotion variant or a real actuator model, registers the body, and teaches
+the drive systems to apply it. Leave the town, the tile world, and the
+`terra/rover` keys shared.
+
 ## Not in this repo
 
 Terra #22, easy robot import with flexible actuators, is a separate project.

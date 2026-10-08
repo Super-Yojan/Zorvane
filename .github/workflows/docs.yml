@@ -1,0 +1,80 @@
+name: Docs
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: zorvane-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install MkDocs
+        run: pip install -r requirements-docs.txt
+
+      - name: Build site
+        run: mkdocs build --strict
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust API docs
+        run: cargo doc --locked --no-deps -p zorvane-vehicle
+
+      - name: Attach API docs
+        run: |
+          rm -rf site/api
+          mkdir -p site/api
+          cp -a target/doc/. site/api/
+          if [ ! -f site/api/index.html ]; then
+            printf '%s\n' \
+              '<!DOCTYPE html>' \
+              '<html lang="en">' \
+              '<head>' \
+              '<meta charset="utf-8">' \
+              '<title>Zorvane API</title>' \
+              '<meta http-equiv="refresh" content="0; url=zorvane_vehicle/">' \
+              '<link rel="canonical" href="zorvane_vehicle/">' \
+              '</head>' \
+              '<body>' \
+              '<p><a href="zorvane_vehicle/">zorvane-vehicle</a></p>' \
+              '</body>' \
+              '</html>' > site/api/index.html
+          fi
+
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

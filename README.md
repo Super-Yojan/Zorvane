@@ -1,5 +1,10 @@
 # Zorvane
 
+Docs: <https://super-yojan.dev/Zorvane/>.
+Part of <https://super-yojan.dev>.
+Fleet operator: [ARGOS](https://super-yojan.dev/ARGOS/).
+Vehicle body: [Terra](https://super-yojan.dev/Terra/).
+
 Zorvane is the platform-agnostic world and competition simulator extracted from
 [Terra](https://github.com/Super-Yojan/Terra). Terra is the vehicle body. ARGOS
 is the fleet operator. This repo is the world: terrain, physics, cameras, and
