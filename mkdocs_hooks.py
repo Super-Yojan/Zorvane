@@ -33,6 +33,8 @@ REPLACEMENTS = (
     ("](NEXT.md)", "](next.md)"),
     ("](WORLD.md", "](world.md"),
     ("](docs/world-preview.png)", "](world-preview.png)"),
+    ("](../docs/assets/", "](../assets/"),
+    ("](docs/assets/", "](../assets/"),
 )
 
 

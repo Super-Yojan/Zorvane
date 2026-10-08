@@ -1,8 +1,22 @@
 # NEXT competition practice
 
-`TERRA_NEXT=1` loads a dedicated practice pitch for the NEXT competition instead of the town or the real-world tile patch. Zatara is the primary rover: spawn slot zero of the `terra-ground` body (Terra's chassis, `models/rover.glb`, and differential drive). It is not a second vehicle type. The scene is a clean approximation of a small-sided soccer field: an 18 m by 12 m pitch, perimeter boards, six tennis balls, and two open-front deposit buckets in the north penalty area. It is not an official field survey, and it does not score a match.
+**TL;DR.** `TERRA_NEXT=1` loads a practice pitch. Zatara is rover 0 on `terra-ground`. Six tennis balls. Two buckets. No scoring.
 
-Zatara starts at the origin on the south half, facing the buckets (Bevy −Z). Balls rest around midfield. Drive into a ball to push it; once a ball’s center crosses a bucket mouth, a light pull draws it to the back wall so it stays deposited. The bucket opening is wider than the chassis, so Zatara can nose in and then reverse out. Boards keep balls on the pitch.
+![NEXT practice pitch](../docs/assets/next.png)
+
+*18 m by 12 m pitch on a 32 m square. Zatara faces the buckets.*
+
+![Zatara driving](../docs/assets/drive.gif)
+
+*Hold W, or send `cmd_vel`. The rover pushes balls. Buckets keep what crosses the mouth.*
+
+Zatara starts at the origin, on the south half, facing Bevy −Z.
+Balls rest around midfield.
+A ball past the mouth is pulled to the back wall.
+The opening is wider than the chassis.
+Boards keep balls on the pitch.
+
+This is a clean practice layout. It is not an official survey.
 
 ## Launch
 
