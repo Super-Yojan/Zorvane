@@ -106,6 +106,37 @@ Drive and fleet requests must be valid JSON with exactly the fields above and
 fit within 2048 bytes. Count must be an integer from 0 through 32. Goal
 requests use the same size cap; the accepted shapes are below.
 
+## Autonomy channel
+
+With the bridge enabled, these keys are also subscribed. Payloads larger than
+2048 bytes are dropped, and so are messages for an id that is not spawned.
+Decoders live in the Terra crates. A payload that does not decode is ignored.
+
+| Key | What this bridge does with it |
+| --- | --- |
+| `terra/rover/<id>/autonomy` | `decode_level`, then the arbiter's level |
+| `terra/rover/<id>/teleop` | `decode_teleop`, then an operator twist. The in-repo test publishes `{"linear":1,"angular":0}` |
+| `terra/rover/<id>/safety` | `decode_safety`. The in-repo test publishes `{"action":"stop","token":"stop"}` |
+| `terra/rover/<id>/goal/decision` | `decode_decision` on a goal proposal |
+| `terra/rover/<id>/mission/report` | JSON read for a numeric `survivor_id`, reported to the Terra mission model |
+
+About five times a second, and when the controller resets, the bridge publishes
+JSON from those same crates:
+
+| Key | When |
+| --- | --- |
+| `terra/rover/<id>/map/occupancy` | That rover has a depth occupancy snapshot |
+| `terra/rover/<id>/autonomy/status` | The rover is spawned and Zenoh is enabled |
+| `terra/rover/<id>/goal/proposal` | same |
+| `terra/rover/<id>/mission/status` | same |
+| `terra/rover/<id>/experiment/status` | same |
+
+`goal/status` is published on that same cadence. Run logs are JSONL under
+`TERRA_RUN_DIR` (default `runs`). `TERRA_MISSION=1` changes the world layout
+only. This channel runs whenever the bridge is on. `TERRA_ASSIGNED_LEVEL`, when
+set, is parsed as a JSON string into the arbiter's assigned level.
+`TERRA_TRIAL_DESIGN` (default `adaptive`) is stored in the run manifest.
+
 ## Go to waypoint
 
 `cmd_vel` remains the debug teleop path: ARGOS or TerraPhone may stream twists,
@@ -173,9 +204,9 @@ status are the projected metres, not the command.
 
 ### ARGOS follow-up
 
-ARGOS does not speak this topic yet. `docs/DESIGN.md` there already says goal
-keys land in `src/argos/contract.py` after Terra specifies them. The follow-up
-in `Super-Yojan/ARGOS` is:
+Zorvane already implements the goal keys above. The operator site is
+[ARGOS](https://super-yojan.dev/ARGOS/). The client work recorded with this
+bridge is:
 
 - Add `TerraTopics.goal(rover_id)` → `<prefix>/<id>/goal` and `goal_status` → `<prefix>/<id>/goal/status`.
 - Add `encode_goal` for the three bodies above, with the same 2048-byte cap as `encode_twist`.
@@ -257,4 +288,4 @@ cleanup after a rover is removed.
 
 ## iOS client
 
-TerraPhone can publish velocity commands directly to this bridge and build a local occupancy map from the depth stream. Configure the endpoint and rover ID in the app’s **Bevy simulator · Zenoh** section. Use localhost in iOS Simulator or the Mac’s LAN address on a physical phone; for LAN access bind this simulator to `tcp/0.0.0.0:7447`. See [phone demo and verification](../docs/MOBILE_CONTROL.md#drive-bevy-from-terraphone-over-zenoh). The app refreshes a leased Rust publisher, sends at 20 Hz, and sends zero when stopped or backgrounded. While connected it subscribes to `terra/rover/<id>/camera/depth`, keeps the latest posed frame, and integrates it with `MobileOccupancyMap`. The on-screen grid is phone-local. Fleet/state, RGB, and a Zenoh occupancy snapshot for other operators are follow-ups.
+TerraPhone can publish velocity commands directly to this bridge and build a local occupancy map from the depth stream. Configure the endpoint and rover ID in the app’s **Bevy simulator · Zenoh** section. Use localhost in iOS Simulator or the Mac’s LAN address on a physical phone; for LAN access bind this simulator to `tcp/0.0.0.0:7447`. Phone setup lives in Terra: [mobile control](https://github.com/Super-Yojan/Terra/blob/main/docs/MOBILE_CONTROL.md) and the [Terra docs](https://super-yojan.dev/Terra/). The app refreshes a leased Rust publisher, sends at 20 Hz, and sends zero when stopped or backgrounded. While connected it subscribes to `terra/rover/<id>/camera/depth`, keeps the latest posed frame, and integrates it with `MobileOccupancyMap`. The on-screen grid is phone-local. This bridge already publishes fleet state, RGB, and `map/occupancy`. TerraPhone consuming fleet state, RGB, and that occupancy snapshot is follow-up work in Terra.
