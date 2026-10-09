@@ -8198,6 +8198,7 @@ dependencies = [
 [[package]]
 name = "terra-autonomy"
 version = "0.1.0"
+source = "git+https://github.com/Super-Yojan/Terra.git?rev=4fab0a9dfd251f7b1b8d71687d51600aa33502ad#4fab0a9dfd251f7b1b8d71687d51600aa33502ad"
 dependencies = [
  "serde",
  "serde_json",
@@ -8209,6 +8210,7 @@ dependencies = [
 [[package]]
 name = "terra-control"
 version = "0.1.0"
+source = "git+https://github.com/Super-Yojan/Terra.git?rev=4fab0a9dfd251f7b1b8d71687d51600aa33502ad#4fab0a9dfd251f7b1b8d71687d51600aa33502ad"
 dependencies = [
  "terra-state",
  "terra-types",
@@ -8217,6 +8219,7 @@ dependencies = [
 [[package]]
 name = "terra-experiment"
 version = "0.1.0"
+source = "git+https://github.com/Super-Yojan/Terra.git?rev=4fab0a9dfd251f7b1b8d71687d51600aa33502ad#4fab0a9dfd251f7b1b8d71687d51600aa33502ad"
 dependencies = [
  "serde",
  "serde_json",
@@ -8226,6 +8229,7 @@ dependencies = [
 [[package]]
 name = "terra-mapping"
 version = "0.1.0"
+source = "git+https://github.com/Super-Yojan/Terra.git?rev=4fab0a9dfd251f7b1b8d71687d51600aa33502ad#4fab0a9dfd251f7b1b8d71687d51600aa33502ad"
 dependencies = [
  "terra-types",
 ]
@@ -8233,6 +8237,7 @@ dependencies = [
 [[package]]
 name = "terra-navigation"
 version = "0.1.0"
+source = "git+https://github.com/Super-Yojan/Terra.git?rev=4fab0a9dfd251f7b1b8d71687d51600aa33502ad#4fab0a9dfd251f7b1b8d71687d51600aa33502ad"
 dependencies = [
  "serde",
  "serde_json",
@@ -8242,6 +8247,7 @@ dependencies = [
 [[package]]
 name = "terra-state"
 version = "0.1.0"
+source = "git+https://github.com/Super-Yojan/Terra.git?rev=4fab0a9dfd251f7b1b8d71687d51600aa33502ad#4fab0a9dfd251f7b1b8d71687d51600aa33502ad"
 dependencies = [
  "terra-types",
 ]
@@ -8249,6 +8255,7 @@ dependencies = [
 [[package]]
 name = "terra-transport"
 version = "0.1.0"
+source = "git+https://github.com/Super-Yojan/Terra.git?rev=4fab0a9dfd251f7b1b8d71687d51600aa33502ad#4fab0a9dfd251f7b1b8d71687d51600aa33502ad"
 dependencies = [
  "serde_json",
  "zenoh",
@@ -8257,10 +8264,12 @@ dependencies = [
 [[package]]
 name = "terra-types"
 version = "0.1.0"
+source = "git+https://github.com/Super-Yojan/Terra.git?rev=4fab0a9dfd251f7b1b8d71687d51600aa33502ad#4fab0a9dfd251f7b1b8d71687d51600aa33502ad"
 
 [[package]]
 name = "terra-waypoint"
 version = "0.1.0"
+source = "git+https://github.com/Super-Yojan/Terra.git?rev=4fab0a9dfd251f7b1b8d71687d51600aa33502ad#4fab0a9dfd251f7b1b8d71687d51600aa33502ad"
 dependencies = [
  "serde",
  "serde_json",

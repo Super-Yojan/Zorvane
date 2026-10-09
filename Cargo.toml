@@ -9,16 +9,16 @@ edition = "2024"
 [workspace.dependencies]
 zorvane-vehicle = { path = "crates/zorvane-vehicle" }
 # Shared robotics crates stay in Terra (TerraPhone and the Pi still compile them).
-# L4 integration checkout: use the paired local Terra working tree.
-terra-transport = { path = "../Terra/crates/terra-transport" }
-terra-autonomy = { path = "../Terra/crates/terra-autonomy" }
-terra-navigation = { path = "../Terra/crates/terra-navigation" }
-terra-experiment = { path = "../Terra/crates/terra-experiment" }
-terra-mapping = { path = "../Terra/crates/terra-mapping" }
-terra-types = { path = "../Terra/crates/terra-types" }
-terra-state = { path = "../Terra/crates/terra-state" }
-terra-control = { path = "../Terra/crates/terra-control" }
-terra-waypoint = { path = "../Terra/crates/terra-waypoint" }
+# Pin the same validated L4 runtime used by TerraPhone.
+terra-transport = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-autonomy = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-navigation = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-experiment = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-mapping = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-types = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-state = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-control = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-waypoint = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
 
 [profile.dev]
 opt-level = 1
