@@ -1648,6 +1648,7 @@ if let Some(grid)=snapshot.as_ref() {
     outgoing.states.insert((id.0,"map/occupancy".into()),serde_json::to_vec(&terra_autonomy::occupancy_telemetry(id.0,&runtime.run_id,map.map(|m|m.last_sequence).unwrap_or(0),grid)).unwrap());
 }
             for (kind, value) in [
+                ("hardware/status", serde_json::json!({"version":1,"run_id":runtime.run_id,"ready":true,"armed":true,"arming":false,"simulated":true,"reason":"Simulated actuation ready"})),
                 (
                     "autonomy/status",
                     serde_json::to_value(&output.status).unwrap(),
@@ -1739,5 +1740,13 @@ mod autonomy_integration_tests {
             shared.outgoing.lock().unwrap().states[&(1, "autonomy/status".into())].clone();
         let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
         assert_eq!(value["safety"], "emergency_stop");
+        let payload = shared.outgoing.lock().unwrap().states[&(1, "hardware/status".into())].clone();
+        let capability: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(capability["simulated"], true);
+        assert_eq!(capability["ready"], true);
+        assert_eq!(capability["armed"], true);
+        // Virtual readiness cannot release the arbiter's emergency-stop latch.
+        assert!(q.iter(app.world()).all(|(_, c)| c.linear == 0.));
+
     }
 }
