@@ -120,6 +120,7 @@ struct Outgoing {
     fleet: Option<Vec<u8>>,
     goals: BTreeMap<u64, Vec<u8>>,
     states: BTreeMap<(u64, String), Vec<u8>>,
+    reports:BTreeMap<u64,Vec<Vec<u8>>>,
 }
 #[derive(Clone)]
 struct GoalInbox {
@@ -367,7 +368,7 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
             };
             if !matches!(
                 kind,
-                "autonomy" | "teleop" | "safety" | "goal/decision" | "mission/report"
+                "autonomy" | "teleop" | "safety" | "goal/decision" | "mission/report" | "search" | "search/action" | "search/report/ack"
             ) {
                 return;
             }
@@ -481,6 +482,7 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
                     .wait()?;
             }
         }
+        for (id,reports) in outgoing.reports {if live.contains(&id){for report in reports {session.put(format!("{}/{id}/search/report",config.prefix),report).encoding(zenoh::bytes::Encoding::APPLICATION_JSON).wait()?;}}}
         for (id, payload) in outgoing.goals {
             if !live.contains(&id) {
                 continue;
@@ -1333,6 +1335,7 @@ struct AutonomousRover {
     near_miss: terra_experiment::NearMiss,
     contacts: std::collections::BTreeSet<Entity>,
     observed_area: terra_experiment::ObservedArea,
+    detector_frame: Option<u64>,
 }
 #[derive(Component, Default)]
 pub(crate) struct AutonomyMotorGate {
@@ -1363,7 +1366,7 @@ impl Default for AutonomyRuntime {
         );
         let root = std::env::var("TERRA_RUN_DIR").unwrap_or_else(|_| "runs".into());
         let _ = std::fs::create_dir_all(&root);
-        let manifest = serde_json::json!({"run_id":run_id,"platform":"bevy","mission":config,"trial_design":std::env::var("TERRA_TRIAL_DESIGN").unwrap_or_else(|_|"adaptive".into()),"planner":terra_navigation::PlannerConfig::default(),"collision_observation":"simulator_contacts","git_revision":option_env!("TERRA_GIT_REVISION").unwrap_or("unknown")});
+        let manifest = serde_json::json!({"run_id":run_id,"platform":"bevy","mission":config,"trial_design":std::env::var("TERRA_TRIAL_DESIGN").unwrap_or_else(|_|"adaptive".into()),"planner":terra_navigation::PlannerConfig::default(),"collision_observation":"simulator_contacts","target_detector":{"id":"sim-survivor-v1","classes":["survivor"],"range_m":5,"half_fov_radians":std::f64::consts::FRAC_PI_3,"confirmation":terra_autonomy::ConfirmationConfig::default()},"git_revision":option_env!("TERRA_GIT_REVISION").unwrap_or("unknown")});
         let recorder = terra_experiment::RunRecorder::create(
             &std::path::Path::new(&root).join(format!("{run_id}.jsonl")),
             manifest,
@@ -1453,8 +1456,11 @@ fn drive_autonomy(
                 near_miss: terra_experiment::NearMiss::default(),
                 contacts: std::collections::BTreeSet::new(),
                 observed_area: terra_experiment::ObservedArea::default(),
+                detector_frame: None,
             }
         });
+        let detector_enabled=std::env::var("TERRA_MISSION").as_deref()==Ok("1");
+        if detector_enabled&&map_time.is_some_and(|t|now-t<0.5){let _=tracked.arbiter.set_detector_capability(vec!["survivor".into()],"sim-survivor-v1".into(),now);}
         if let Some(p) = patch.as_ref() {
             tracked
                 .arbiter
@@ -1516,6 +1522,11 @@ fn drive_autonomy(
                             );
                         }
                     }
+                    "search" | "search/action" => {
+                        let input=ArbiterInput{now,pose,pose_time:now,map:snapshot.as_ref(),map_time,map_revision:map.map(|m|m.last_sequence).unwrap_or(0),measured,healthy};
+                        if received.elapsed().as_secs_f64()<0.5 {if kind=="search"{if let Some(r)=decode_search_request(&bytes){let _=tracked.arbiter.start_search(r,&input);}}else if let Some(r)=decode_search_action(&bytes){let _=tracked.arbiter.apply_search_action(r,&input);}}
+                    }
+                    "search/report/ack" => {if let Some(r)=decode_search_report_ack(&bytes){tracked.arbiter.ack_search_report(r);}}
                     "mission/report" => {
                         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                             if let Some(target) = v["survivor_id"].as_u64() {
@@ -1535,6 +1546,10 @@ fn drive_autonomy(
                 tracked.goal_seq = g.seq;
                 tracked.arbiter.accept_goal(&g.command, half);
             }
+        }
+        if detector_enabled && let (Some(grid),Some(search))=(snapshot.as_ref(),tracked.arbiter.search_status(now)) {
+            let frame=map.map(|m|m.last_sequence).unwrap_or(0);
+            if tracked.detector_frame!=Some(frame){tracked.detector_frame=Some(frame);if let Some(observation)=crate::target_search::observation(grid,pose,runtime.mission.candidates(),&search,frame,now){let _=tracked.arbiter.accept_target_observation(observation,now);}}
         }
         let mut output = tracked.arbiter.step(ArbiterInput {
             now,
@@ -1615,7 +1630,7 @@ fn drive_autonomy(
         tracked.contacts = touching;
         runtime.mission.update_pose(id.0, x, y, now);
         runtime.sequence += 1;
-        let event = serde_json::json!({"kind":"control_tick","run_id":runtime.run_id,"sequence":runtime.sequence,"rover_id":id.0,"time":now,"status":output.status,"selected":output.twist,"source_command":output.intent,"pose":pose,"goal":output.goal,"proposal":output.proposal,"events":output.events,"mission":runtime.mission.status(now),"clearance":clearance,"observed_free_area":observed_area});
+        let event = serde_json::json!({"kind":"control_tick","run_id":runtime.run_id,"sequence":runtime.sequence,"rover_id":id.0,"time":now,"status":output.status,"selected":output.twist,"source_command":output.intent,"pose":pose,"goal":output.goal,"proposal":output.proposal,"events":output.events,"mission":runtime.mission.status(now),"search":output.search,"clearance":clearance,"observed_free_area":observed_area});
         if let Some(r) = runtime.recorder.as_ref() {
             let _ = r.record(event);
         }
@@ -1625,6 +1640,7 @@ fn drive_autonomy(
                 .unwrap()
                 .as_secs_f64();
             let mut outgoing = bridge.shared.outgoing.lock().unwrap();
+            outgoing.reports.insert(id.0,output.pending_reports.iter().map(|r|serde_json::to_vec(r).unwrap()).collect());
             outgoing
                 .goals
                 .insert(id.0, encode_status(&output.goal).unwrap());
@@ -1632,10 +1648,13 @@ if let Some(grid)=snapshot.as_ref() {
     outgoing.states.insert((id.0,"map/occupancy".into()),serde_json::to_vec(&terra_autonomy::occupancy_telemetry(id.0,&runtime.run_id,map.map(|m|m.last_sequence).unwrap_or(0),grid)).unwrap());
 }
             for (kind, value) in [
+                ("hardware/status", serde_json::json!({"version":1,"run_id":runtime.run_id,"ready":true,"armed":true,"arming":false,"simulated":true,"reason":"Simulated actuation ready"})),
                 (
                     "autonomy/status",
                     serde_json::to_value(&output.status).unwrap(),
                 ),
+                ("search/status",serde_json::to_value(&output.search).unwrap()),
+
                 (
                     "goal/proposal",
                     serde_json::to_value(&output.proposal).unwrap(),
@@ -1721,5 +1740,13 @@ mod autonomy_integration_tests {
             shared.outgoing.lock().unwrap().states[&(1, "autonomy/status".into())].clone();
         let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
         assert_eq!(value["safety"], "emergency_stop");
+        let payload = shared.outgoing.lock().unwrap().states[&(1, "hardware/status".into())].clone();
+        let capability: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(capability["simulated"], true);
+        assert_eq!(capability["ready"], true);
+        assert_eq!(capability["armed"], true);
+        // Virtual readiness cannot release the arbiter's emergency-stop latch.
+        assert!(q.iter(app.world()).all(|(_, c)| c.linear == 0.));
+
     }
 }

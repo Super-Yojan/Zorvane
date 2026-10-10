@@ -1,3 +1,4 @@
+mod target_search;
 mod depth_camera;
 mod geo;
 mod landscape;

@@ -9,16 +9,16 @@ edition = "2024"
 [workspace.dependencies]
 zorvane-vehicle = { path = "crates/zorvane-vehicle" }
 # Shared robotics crates stay in Terra (TerraPhone and the Pi still compile them).
-# Pinned to the Terra main commit this extraction was taken from.
-terra-transport = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
-terra-autonomy = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
-terra-navigation = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
-terra-experiment = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
-terra-mapping = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
-terra-types = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
-terra-state = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
-terra-control = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
-terra-waypoint = { git = "https://github.com/Super-Yojan/Terra.git", rev = "d0c34872e70cfe05750eef0662c4d8a58cd51889" }
+# Pin the same validated L4 runtime used by TerraPhone.
+terra-transport = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-autonomy = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-navigation = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-experiment = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-mapping = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-types = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-state = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-control = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
+terra-waypoint = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4fab0a9dfd251f7b1b8d71687d51600aa33502ad" }
 
 [profile.dev]
 opt-level = 1
