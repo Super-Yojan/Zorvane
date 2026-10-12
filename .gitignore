@@ -9,3 +9,6 @@ simulator/runs/
 .DS_Store
 *.swp
 .venv/
+
+# Local simulation recordings.
+/runs/
