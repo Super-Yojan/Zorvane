@@ -139,6 +139,14 @@ impl VehicleRegistry {
             .as_ref()
     }
 
+    /// Find a registered body by its stable configuration ID.
+    pub fn body(&self, id: &str) -> Option<&dyn VehicleBody> {
+        self.bodies
+            .iter()
+            .find(|body| body.id() == id)
+            .map(|body| body.as_ref())
+    }
+
     /// Built-in bodies shipped with Zorvane. `id` `None` selects Terra's ground rover.
     pub fn from_id(id: Option<&str>) -> Result<Self, String> {
         let mut registry = Self::new();
@@ -219,6 +227,11 @@ mod tests {
     fn registry_defaults_to_terra_and_accepts_another_body() {
         let registry = VehicleRegistry::from_id(None).unwrap();
         assert_eq!(registry.active().id(), "terra-ground");
+        assert_eq!(
+            registry.body("terra-ground").unwrap().display_name(),
+            "Terra"
+        );
+        assert!(registry.body("missing").is_none());
 
         let mut registry = VehicleRegistry::from_id(Some("terra-ground")).unwrap();
         registry.register(Box::new(PlaceholderDrone));

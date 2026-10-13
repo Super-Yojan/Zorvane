@@ -166,111 +166,180 @@ pub struct RoverId(pub u64);
 pub struct RoverSlot(pub usize);
 #[derive(Resource)]
 pub struct RoverFleet {
-    count: usize,
+    enabled: Vec<bool>,
     next_id: u64,
 }
 impl Default for RoverFleet {
     fn default() -> Self {
         Self {
-            count: 1,
+            enabled: vec![true],
             next_id: 0,
         }
     }
 }
 impl RoverFleet {
     pub fn count(&self) -> usize {
-        self.count
+        self.enabled.iter().filter(|enabled| **enabled).count()
     }
     pub fn set_count(&mut self, count: usize) -> Result<(), &'static str> {
         if count > MAX_ROVERS {
             return Err("rover count must be between 0 and 32");
         }
-        self.count = count;
+        self.enabled.resize(MAX_ROVERS, false);
+        for (slot, enabled) in self.enabled.iter_mut().enumerate() {
+            *enabled = slot < count;
+        }
         Ok(())
     }
-    pub fn from_env() -> Result<Self, String> {
-        let mut fleet = Self::default();
-        if let Ok(value) = std::env::var("TERRA_ROVER_COUNT") {
-            let count = value
-                .parse::<usize>()
-                .map_err(|_| "TERRA_ROVER_COUNT must be an integer".to_owned())?;
-            fleet.set_count(count).map_err(str::to_owned)?;
+    pub fn set_enabled(&mut self, slot: usize, enabled: bool) -> Result<(), &'static str> {
+        if slot >= MAX_ROVERS {
+            return Err("rover slot must be between 1 and 32");
         }
-        Ok(fleet)
+        self.enabled.resize(MAX_ROVERS, false);
+        self.enabled[slot] = enabled;
+        Ok(())
+    }
+    pub fn enabled_slots(&self) -> impl Iterator<Item = usize> + '_ {
+        self.enabled
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, enabled)| enabled.then_some(slot))
+    }
+    pub fn from_roster(roster: &crate::roster::RobotRoster) -> Self {
+        let mut enabled: Vec<_> = roster.0.iter().map(|robot| robot.enabled).collect();
+        enabled.resize(MAX_ROVERS, false);
+        Self {
+            enabled,
+            next_id: 0,
+        }
     }
 }
 pub(crate) fn reconcile_fleet(
     mut commands: Commands,
     assets: Option<Res<AssetServer>>,
-    config: Res<DriveConfig>,
     physics: Res<RoverPhysicsConfig>,
     mut fleet: ResMut<RoverFleet>,
     world: Option<Res<crate::world::WorldConfig>>,
     vehicles: Option<Res<crate::vehicle::Vehicles>>,
+    roster: Option<Res<crate::roster::RobotRoster>>,
+    mut meshes: Option<ResMut<Assets<Mesh>>>,
+    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
     rovers: Query<(Entity, &RoverId, &RoverSlot, &Transform), With<Rover>>,
 ) {
     let mut existing: Vec<_> = rovers.iter().collect();
     existing.sort_by_key(|(_, id, _, _)| id.0);
-    if existing.len() > fleet.count() {
-        for (entity, _, _, _) in &existing[fleet.count()..] {
+    let enabled_slots: std::collections::BTreeSet<_> = fleet.enabled_slots().collect();
+    for (entity, _, slot, _) in &existing {
+        if !enabled_slots.contains(&slot.0) {
             commands.entity(*entity).despawn();
         }
-        return;
     }
-    let mut occupied: std::collections::BTreeSet<_> =
-        existing.iter().map(|(_, _, slot, _)| slot.0).collect();
-    let spacing = physics.chassis_size.x.max(physics.chassis_size.z) + 0.6;
-    let max_distance = world.as_ref().map_or(100.0, |world| world.size) * 0.38;
-    let available_slots = 1 + 4 * (max_distance / spacing).floor() as usize;
+    let mut occupied: std::collections::BTreeSet<_> = existing
+        .iter()
+        .filter(|(_, _, slot, _)| enabled_slots.contains(&slot.0))
+        .map(|(_, _, slot, _)| slot.0)
+        .collect();
+    let mut fleet_chassis = physics.chassis_size;
+    if let Some(roster) = roster.as_deref()
+        && let Some(vehicles) = vehicles.as_deref()
+    {
+        for robot in roster.0.iter().filter(|robot| robot.enabled) {
+            if let Some(body) = vehicles.0.body(&robot.vehicle) {
+                let chassis = body.chassis();
+                fleet_chassis = fleet_chassis.max(Vec3::new(
+                    chassis.size_xyz[0],
+                    chassis.size_xyz[1],
+                    chassis.size_xyz[2],
+                ));
+            }
+        }
+    }
+    let spacing = fleet_chassis.x.max(fleet_chassis.z) + 0.6;
     let mut positions: Vec<_> = existing
         .iter()
+        .filter(|(_, _, slot, _)| enabled_slots.contains(&slot.0))
         .map(|(_, _, _, pose)| pose.translation.with_y(0.0))
         .collect();
     let offset_for = |slot: usize| {
-        if slot == 0 {
-            Vec3::ZERO
-        } else {
-            let distance = ((slot - 1) / 4 + 1) as f32 * spacing;
-            match (slot - 1) % 4 {
-                0 => Vec3::X * distance,
-                1 => Vec3::NEG_X * distance,
-                2 => Vec3::Z * distance,
-                _ => Vec3::NEG_Z * distance,
-            }
-        }
+        slot_spawn_offset(
+            slot,
+            spacing,
+            fleet_chassis,
+            world.as_ref().map_or(100.0, |world| world.size),
+            crate::next_competition::enabled(),
+        )
     };
-    for _ in existing.len()..fleet.count() {
-        // Retry on a later update if moving rovers occupy every safe road spawn.
-        let Some(slot) = (0..available_slots).find(|slot| {
-            !occupied.contains(slot)
-                && positions
-                    .iter()
-                    .all(|position| position.distance(offset_for(*slot)) >= spacing - 0.1)
-        }) else {
-            break;
+    for slot in enabled_slots.iter().copied() {
+        if occupied.contains(&slot) {
+            continue;
+        }
+        let Some(offset) = offset_for(slot) else {
+            continue;
         };
+        // Leave a delayed spawn pending if another moving rover currently occupies it.
+        if positions
+            .iter()
+            .any(|position| position.distance(offset) < spacing - 0.1)
+        {
+            continue;
+        }
         occupied.insert(slot);
-        let offset = offset_for(slot);
         positions.push(offset);
         let id = RoverId(fleet.next_id);
         fleet.next_id = fleet
             .next_id
             .checked_add(1)
             .expect("rover ID space exhausted");
-        let label = vehicles
+        let fallback_label = vehicles
             .as_ref()
             .map(|vehicles| vehicles.0.active().display_name())
             .unwrap_or(zorvane_vehicle::TerraGround.display_name());
+        let definition = roster.as_ref().and_then(|roster| roster.slot(slot));
+        let body = definition
+            .and_then(|robot| vehicles.as_ref()?.0.body(&robot.vehicle))
+            .or_else(|| vehicles.as_ref().map(|vehicles| vehicles.0.active()))
+            .unwrap_or(&zorvane_vehicle::TerraGround);
+        let rover_drive = DriveConfig::from_body(body)
+            .expect("registered vehicle must have supported differential drive");
+        let rover_physics = RoverPhysicsConfig::from_body(body)
+            .expect("registered vehicle must have a valid chassis");
+        let label =
+            definition.map_or_else(|| format!("robot{}", slot + 1), |robot| robot.name.clone());
+        let topic =
+            definition.map_or_else(|| format!("robot{}", slot + 1), |robot| robot.topic.clone());
+        let description = definition.map_or_else(
+            || fallback_label.to_owned(),
+            |robot| robot.description.clone(),
+        );
+        let vehicle =
+            definition.map_or_else(|| "terra-ground".to_owned(), |robot| robot.vehicle.clone());
+        let color = definition
+            .and_then(|robot| robot.color)
+            .map_or_else(|| slot_color(slot), |[r, g, b]| Color::srgb(r, g, b));
         let mut rover = commands.spawn((
-            Name::new(format!("{label} {}", id.0)),
+            Name::new(label.clone()),
+            RoverIdentity {
+                name: label,
+                description,
+                topic,
+                vehicle,
+            },
             Rover,
             id,
             RoverSlot(slot),
             DriveCommand::default(),
             WheelSpeeds::default(),
             Odometry::default(),
-            RoverBody::new(&physics),
-            Transform::from_translation(offset + Vec3::Y * (physics.chassis_size.y / 2.0 + 0.02)),
+            RoverDriveConfig(rover_drive.clone()),
+            RoverBody::new(&rover_physics),
+            Transform::from_translation(
+                offset + Vec3::Y * (rover_physics.chassis_size.y / 2.0 + 0.02),
+            )
+            .with_rotation(if slot % 2 == 0 {
+                Quat::IDENTITY
+            } else {
+                Quat::from_rotation_y(std::f32::consts::PI)
+            }),
         ));
         if slot == 0 {
             rover.insert(KeyboardControlled);
@@ -279,24 +348,101 @@ pub(crate) fn reconcile_fleet(
             rover.with_children(|parent| {
                 parent.spawn((
                     WorldAssetRoot(
-                        assets.load(GltfAssetLabel::Scene(0).from_asset(config.model_path.clone())),
+                        assets.load(
+                            GltfAssetLabel::Scene(0).from_asset(rover_drive.model_path.clone()),
+                        ),
                     ),
-                    Transform::from_scale(Vec3::splat(physics.model_scale)),
+                    Transform::from_scale(Vec3::splat(rover_physics.model_scale)),
+                ));
+            });
+        }
+        if let (Some(meshes), Some(materials)) = (meshes.as_deref_mut(), materials.as_deref_mut()) {
+            let marker_mesh =
+                meshes.add(Sphere::new(0.22).mesh().ico(2).expect("valid marker mesh"));
+            let marker_material = materials.add(StandardMaterial {
+                base_color: color,
+                emissive: color.into(),
+                ..default()
+            });
+            rover.with_children(|parent| {
+                parent.spawn((
+                    Mesh3d(marker_mesh),
+                    MeshMaterial3d(marker_material),
+                    Transform::from_xyz(0.0, rover_physics.chassis_size.y * 0.5 + 0.30, 0.0),
                 ));
             });
         }
     }
 }
 
+fn slot_spawn_offset(
+    slot: usize,
+    spacing: f32,
+    chassis: Vec3,
+    world_size: f32,
+    next_field: bool,
+) -> Option<Vec3> {
+    let x = (slot / 2) as f32 * spacing;
+    let z = if next_field {
+        if slot % 2 == 0 {
+            crate::next_competition::PITCH_SOUTH - chassis.z * 0.5 - 0.5
+        } else {
+            crate::next_competition::PITCH_NORTH + chassis.z * 0.5 + 0.5
+        }
+    } else if slot % 2 == 0 {
+        spacing * 0.5
+    } else {
+        -spacing * 0.5
+    };
+    if x.abs() + chassis.x * 0.5 > world_size * 0.5 || z.abs() + chassis.z * 0.5 > world_size * 0.5
+    {
+        return None;
+    }
+    if next_field && !crate::next_competition::on_pitch(x, z, chassis.x.max(chassis.z) * 0.5) {
+        return None;
+    }
+    Some(Vec3::new(x, 0.0, z))
+}
+
+fn slot_color(slot: usize) -> Color {
+    const COLORS: [[f32; 3]; 8] = [
+        [0.92, 0.18, 0.12],
+        [0.12, 0.42, 0.96],
+        [0.98, 0.68, 0.08],
+        [0.12, 0.78, 0.40],
+        [0.72, 0.28, 0.90],
+        [0.05, 0.75, 0.78],
+        [0.96, 0.36, 0.62],
+        [0.78, 0.82, 0.18],
+    ];
+    let [r, g, b] = COLORS[slot % COLORS.len()];
+    Color::srgb(r, g, b)
+}
+
+#[derive(Component, Clone, Debug)]
+pub struct RoverIdentity {
+    pub name: String,
+    pub description: String,
+    pub topic: String,
+    pub vehicle: String,
+}
+
+#[derive(Component, Clone)]
+pub struct RoverDriveConfig(pub DriveConfig);
+
 fn keyboard_command(
     keys: Res<ButtonInput<KeyCode>>,
-    config: Res<DriveConfig>,
-    mut rovers: Query<&mut DriveCommand, (With<Rover>, With<KeyboardControlled>)>,
+    fallback: Res<DriveConfig>,
+    mut rovers: Query<
+        (&mut DriveCommand, Option<&RoverDriveConfig>),
+        (With<Rover>, With<KeyboardControlled>),
+    >,
 ) {
     let axis = |positive, negative| {
         keys.pressed(positive) as i32 as f32 - keys.pressed(negative) as i32 as f32
     };
-    for mut command in &mut rovers {
+    for (mut command, rover_config) in &mut rovers {
+        let config = rover_config.map_or(fallback.as_ref(), |config| &config.0);
         *command = if keys.pressed(KeyCode::Space) {
             DriveCommand::default()
         } else {
@@ -313,6 +459,7 @@ type RoverDriveQuery<'w, 's> = Query<
     's,
     (
         &'static DriveCommand,
+        Option<&'static RoverDriveConfig>,
         &'static mut WheelSpeeds,
         &'static mut Odometry,
         &'static Rotation,
@@ -322,8 +469,13 @@ type RoverDriveQuery<'w, 's> = Query<
     With<Rover>,
 >;
 
-pub(crate) fn drive(time: Res<Time<Fixed>>, config: Res<DriveConfig>, mut rovers: RoverDriveQuery) {
-    for (command, mut wheels, mut pose, rotation, mut linear, mut angular) in &mut rovers {
+pub(crate) fn drive(
+    time: Res<Time<Fixed>>,
+    fallback: Res<DriveConfig>,
+    mut rovers: RoverDriveQuery,
+) {
+    for (command, config, mut wheels, mut pose, rotation, mut linear, mut angular) in &mut rovers {
+        let config = config.map_or(fallback.as_ref(), |config| &config.0);
         *wheels = config.wheels(*command);
         let (v, w) = if config.validate().is_ok() {
             config.twist(*wheels)
@@ -387,6 +539,51 @@ mod tests {
         let velocity = app.world().get::<LinearVelocity>(entity).unwrap().0;
         near(velocity.x, 0.0);
         near(velocity.y, -2.0);
+    }
+
+    #[test]
+    fn two_headless_rovers_apply_different_drive_commands_independently() {
+        let mut time = Time::<Fixed>::default();
+        time.advance_by(std::time::Duration::from_secs(1));
+        let mut app = App::new();
+        app.insert_resource(time)
+            .insert_resource(DriveConfig::default())
+            .add_systems(FixedUpdate, drive);
+        let moving = app
+            .world_mut()
+            .spawn((
+                Rover,
+                DriveCommand {
+                    linear: 1.0,
+                    angular: 0.0,
+                },
+                WheelSpeeds::default(),
+                Odometry::default(),
+                Rotation(Quat::IDENTITY),
+                LinearVelocity::ZERO,
+                AngularVelocity::ZERO,
+            ))
+            .id();
+        let stopped = app
+            .world_mut()
+            .spawn((
+                Rover,
+                DriveCommand::default(),
+                WheelSpeeds::default(),
+                Odometry::default(),
+                Rotation(Quat::IDENTITY),
+                LinearVelocity::ZERO,
+                AngularVelocity::ZERO,
+            ))
+            .id();
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(app.world().get::<Odometry>(moving).unwrap().z < -0.9);
+        assert_eq!(app.world().get::<Odometry>(stopped).unwrap().z, 0.0);
+        assert!(app.world().get::<LinearVelocity>(moving).unwrap().z < -0.9);
+        assert_eq!(
+            app.world().get::<LinearVelocity>(stopped).unwrap().length(),
+            0.0
+        );
     }
 
     #[test]
@@ -503,6 +700,83 @@ mod tests {
         );
     }
     #[test]
+    fn fleet_slots_can_be_toggled_individually() {
+        let mut fleet = RoverFleet::default();
+        fleet.set_enabled(0, false).unwrap();
+        fleet.set_enabled(1, true).unwrap();
+        assert_eq!(fleet.enabled_slots().collect::<Vec<_>>(), [1]);
+        assert_eq!(fleet.count(), 1);
+        fleet.set_enabled(1, false).unwrap();
+        assert_eq!(fleet.enabled_slots().count(), 0);
+    }
+
+    #[test]
+    fn roster_enabled_slots_spawn_and_toggle_without_changing_the_body() {
+        let roster = crate::roster::RobotRoster(vec![
+            crate::roster::RobotDefinition {
+                enabled: true,
+                name: "robot1".into(),
+                description: "first Terra".into(),
+                vehicle: "terra-ground".into(),
+                topic: "robot1".into(),
+                color: None,
+            },
+            crate::roster::RobotDefinition {
+                enabled: false,
+                name: "robot2".into(),
+                description: "second Terra".into(),
+                vehicle: "terra-ground".into(),
+                topic: "robot2".into(),
+                color: None,
+            },
+        ]);
+        let mut app = App::new();
+        app.insert_resource(DriveConfig::default())
+            .insert_resource(RoverPhysicsConfig::default())
+            .insert_resource(RoverFleet::from_roster(&roster))
+            .insert_resource(roster)
+            .add_systems(Update, reconcile_fleet);
+        app.update();
+        let world = app.world_mut();
+        let mut query = world.query::<(&RoverSlot, &RoverIdentity)>();
+        let first: Vec<_> = query
+            .iter(world)
+            .map(|(slot, identity)| (slot.0, identity.name.as_str()))
+            .collect();
+        assert_eq!(first, [(0, "robot1")]);
+        app.world_mut()
+            .resource_mut::<RoverFleet>()
+            .set_enabled(1, true)
+            .unwrap();
+        app.update();
+        let world = app.world_mut();
+        let mut query = world.query::<(
+            &RoverSlot,
+            &RoverIdentity,
+            Option<&KeyboardControlled>,
+        )>();
+        let mut second: Vec<_> = query
+            .iter(world)
+            .map(|(slot, identity, keyboard)| {
+                (slot.0, identity.topic.as_str(), keyboard.is_some())
+            })
+            .collect();
+        second.sort_by_key(|(slot, _, _)| *slot);
+        assert_eq!(second, [(0, "robot1", true), (1, "robot2", false)]);
+        app.world_mut()
+            .resource_mut::<RoverFleet>()
+            .set_enabled(0, false)
+            .unwrap();
+        app.update();
+        let world = app.world_mut();
+        let slots: Vec<_> = world
+            .query::<&RoverSlot>()
+            .iter(world)
+            .map(|slot| slot.0)
+            .collect();
+        assert_eq!(slots, [1]);
+    }
+    #[test]
     fn live_growth_avoids_a_rover_occupying_a_spawn_location() {
         let mut app = App::new();
         app.insert_resource(DriveConfig::default())
@@ -526,6 +800,25 @@ mod tests {
             .collect();
         assert_eq!(positions.len(), 2);
         assert!(positions[0].distance(positions[1]) >= 1.4);
+    }
+
+    #[test]
+    fn next_slots_alternate_pitch_ends_and_remain_inside_without_colliding() {
+        let chassis = Vec3::new(0.9, 0.16, 0.8);
+        let spacing = chassis.x.max(chassis.z) + 0.6;
+        let south = slot_spawn_offset(0, spacing, chassis, 32.0, true).unwrap();
+        let north = slot_spawn_offset(1, spacing, chassis, 32.0, true).unwrap();
+        let south_again = slot_spawn_offset(2, spacing, chassis, 32.0, true).unwrap();
+        for pose in [south, north, south_again] {
+            assert!(crate::next_competition::on_pitch(
+                pose.x,
+                pose.z,
+                chassis.x.max(chassis.z) * 0.5
+            ));
+        }
+        assert!(south.z > 0.0 && north.z < 0.0 && south_again.z > 0.0);
+        assert!(south.distance(north) >= spacing);
+        assert!(south.distance(south_again) >= spacing);
     }
 
     struct NotARover;

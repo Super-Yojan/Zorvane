@@ -2,9 +2,8 @@
 //!
 //! A small-sided soccer pitch with tennis balls and open-front deposit buckets.
 //! Dimensions are a clean practice layout, not an official surveyed field.
-//! The primary rover is named Zatara. It is spawn slot 0 of the active body,
-//! which defaults to `terra-ground` (Terra's chassis and differential drive).
-//! Zatara is not a separate vehicle type.
+//! Slot zero keeps the Zatara gameplay marker. Robot display names come from
+//! the editable roster; Zatara is not a separate vehicle type.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -13,7 +12,7 @@ use bevy::prelude::*;
 pub const WORLD_SIZE: f32 = 32.0;
 /// Pitch width along Bevy X, metres.
 pub const PITCH_HALF_WIDTH: f32 = 6.0;
-/// South goal line. Zatara spawns at the origin, on this half, facing −Z.
+/// South goal line. Slot zero starts at this end, facing −Z.
 pub const PITCH_SOUTH: f32 = 5.0;
 /// North goal line. Deposit buckets sit inside this end.
 pub const PITCH_NORTH: f32 = PITCH_SOUTH - 18.0;
@@ -391,9 +390,7 @@ fn name_zatara(
 ) {
     for (entity, slot) in &rovers {
         if slot.0 == 0 {
-            commands
-                .entity(entity)
-                .insert((Name::new("Zatara"), Zatara));
+            commands.entity(entity).insert(Zatara);
         }
     }
 }

@@ -54,12 +54,19 @@ def encode_goal(args):
     return body
 
 
+def encode_waypoint_level(token):
+    """Select waypoint authority before the one-shot goal request."""
+    if not token or len(token) > 64:
+        raise ValueError("autonomy token must contain 1 through 64 characters")
+    return json.dumps({"level": "waypoint", "token": token})
+
+
 def main():
     import zenoh
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--endpoint", default="tcp/127.0.0.1:7447")
     parser.add_argument("--prefix", default="terra/rover")
-    parser.add_argument("--rover", type=int, default=0, help="Rover ID from fleet/state")
+    parser.add_argument("--rover", default="robot1", help="Robot topic name from fleet/state (default: robot1); numeric IDs remain accepted as aliases")
     actions = parser.add_subparsers(dest="action", required=True)
     frames = actions.add_parser("frames", help="Receive RGB and depth frames")
     frames.add_argument("--all", action="store_true", help="Receive every rover camera")
@@ -79,14 +86,28 @@ def main():
     goto.add_argument("--timeout", type=float, default=45.0)
     fleet = actions.add_parser("fleet", help="List IDs or change the fleet size")
     fleet.add_argument("--count", type=int, help="Desired count, 0 through 32")
+    fleet.add_argument("--robot", help="Robot name/topic segment to toggle")
+    toggle = fleet.add_mutually_exclusive_group()
+    toggle.add_argument("--enable", action="store_true", help="Enable the selected robot")
+    toggle.add_argument("--disable", action="store_true", help="Disable the selected robot")
+    topics = actions.add_parser("topics", help="List Zenoh keys observed publishing during a short discovery window")
+    topics.add_argument("--seconds", type=float, default=3.0,
+                        help="How long to observe keys (default: 3 seconds)")
     args = parser.parse_args()
-    if args.rover < 0:
+    if args.rover.isdecimal() and int(args.rover) < 0:
         parser.error("Rover ID must be nonnegative")
+    if not args.rover or any(char in args.rover for char in "/*#$"):
+        parser.error("Robot name must be one non-empty topic segment")
+    args.topic_rover = f"robot{int(args.rover) + 1}" if args.rover.isdecimal() else args.rover
     if args.action == "fleet" and args.count is not None and not 0 <= args.count <= 32:
         parser.error("Fleet count must be between 0 and 32")
+    if args.action == "fleet" and (args.enable or args.disable) and not args.robot:
+        parser.error("--enable/--disable requires --robot")
     if args.action == "drive" and (not all(math.isfinite(x) for x in
             (args.linear, args.angular, args.seconds)) or args.seconds <= 0):
         parser.error("Drive values must be finite and duration must be positive")
+    if args.action == "topics" and (not math.isfinite(args.seconds) or args.seconds <= 0):
+        parser.error("Topic discovery duration must be finite and positive")
     if args.action == "goto":
         numbers = [value for value in (args.x, args.y, args.yaw, args.lat, args.lon, args.timeout)
                    if value is not None]
@@ -101,8 +122,23 @@ def main():
     config.insert_json5("connect/endpoints", json.dumps([args.endpoint]))
     config.insert_json5("scouting/multicast/enabled", "false")
     with zenoh.open(config) as session:
-        if args.action == "drive":
-            key = f"{args.prefix}/{args.rover}/cmd_vel"
+        if args.action == "topics":
+            observed = set()
+            subscriber = session.declare_subscriber(
+                f"{args.prefix}/**", lambda sample: observed.add(str(sample.key_expr)))
+            try:
+                print(f"Listening for publishing keys under {args.prefix}/ for {args.seconds:g}s…")
+                time.sleep(args.seconds)
+            except KeyboardInterrupt:
+                pass
+            finally:
+                subscriber.undeclare()
+            for key in sorted(observed):
+                print(key)
+            if not observed:
+                print("No publishing keys observed. Check the endpoint and try a longer --seconds window.")
+        elif args.action == "drive":
+            key = f"{args.prefix}/{args.topic_rover}/cmd_vel"
             payload = json.dumps({"linear": args.linear, "angular": args.angular})
             deadline = time.monotonic() + args.seconds
             try:
@@ -114,8 +150,10 @@ def main():
             finally:
                 session.put(key, json.dumps({"linear": 0.0, "angular": 0.0}))
         elif args.action == "goto":
-            status_key = f"{args.prefix}/{args.rover}/goal/status"
-            goal_key = f"{args.prefix}/{args.rover}/goal"
+            status_key = f"{args.prefix}/{args.topic_rover}/goal/status"
+            goal_key = f"{args.prefix}/{args.topic_rover}/goal"
+            level_key = f"{args.prefix}/{args.topic_rover}/autonomy"
+            level_status_key = f"{args.prefix}/{args.topic_rover}/autonomy/status"
             seen, event = {}, threading.Event()
 
             def receive_status(sample):
@@ -126,8 +164,31 @@ def main():
                     return
                 event.set()
 
+            level_seen, level_event = {}, threading.Event()
+
+            def receive_level(sample):
+                nonlocal level_seen
+                try:
+                    level_seen = json.loads(bytes(sample.payload))
+                except json.JSONDecodeError:
+                    return
+                level_event.set()
+
+            level_subscriber = session.declare_subscriber(level_status_key, receive_level)
             subscriber = session.declare_subscriber(status_key, receive_status)
             try:
+                if not args.cancel:
+                    level_event.clear()
+                    level_token = f"goto-{int(time.time() * 1000)}"
+                    session.put(level_key, encode_waypoint_level(level_token))
+                    level_deadline = time.monotonic() + 5.0
+                    while time.monotonic() < level_deadline:
+                        level_event.wait(0.2)
+                        level_event.clear()
+                        if level_seen.get("requested_level") == "waypoint":
+                            break
+                    else:
+                        raise SystemExit("Waypoint autonomy level was not accepted; goal was not sent")
                 event.wait(0.3)
                 previous = seen.get("goal_id", 0) if isinstance(seen, dict) else 0
                 event.clear()
@@ -148,7 +209,13 @@ def main():
                 raise SystemExit("No matching goal status before timeout")
             finally:
                 subscriber.undeclare()
+                level_subscriber.undeclare()
         elif args.action == "fleet":
+            if args.enable or args.disable:
+                session.put(f"{args.prefix}/fleet/{args.robot}/enabled",
+                            json.dumps({"enabled": args.enable}))
+                print(f"Requested {'enable' if args.enable else 'disable'} for {args.robot}")
+                return
             event, state = threading.Event(), {}
             def receive_state(sample):
                 nonlocal state
@@ -186,7 +253,7 @@ def main():
                 except (ValueError, KeyError, TypeError) as error:
                     print(f"Invalid {kind} frame: {error}")
 
-            sensor_id = "*" if args.all else str(args.rover)
+            sensor_id = "*" if args.all else args.topic_rover
             subscriber = session.declare_subscriber(f"{args.prefix}/{sensor_id}/camera/*", receive)
             print("Receiving frames; Ctrl-C to stop. RGB and depth captures are independent.")
             try:

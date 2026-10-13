@@ -1,4 +1,3 @@
-mod target_search;
 mod depth_camera;
 mod geo;
 mod landscape;
@@ -7,6 +6,8 @@ mod next_competition;
 mod occupancy_map;
 mod physics;
 mod rgb_camera;
+mod roster;
+mod target_search;
 mod terra;
 mod vehicle;
 mod velocity_controller;
@@ -28,6 +29,34 @@ fn asset_root() -> String {
 fn main() {
     let vehicles = zorvane_vehicle::VehicleRegistry::from_env().expect("invalid ZORVANE_VEHICLE");
     let body = vehicles.active();
+    let roster = roster::RobotRoster::from_env(body.id()).expect("invalid robot roster");
+    if let Some(robot) = roster
+        .0
+        .iter()
+        .find(|robot| robot.enabled && vehicles.body(&robot.vehicle).is_none())
+    {
+        panic!(
+            "robot '{}' selects unknown vehicle '{}'; register its VehicleBody before selecting it",
+            robot.name, robot.vehicle
+        );
+    }
+    for robot in roster.0.iter().filter(|robot| robot.enabled) {
+        let selected = vehicles
+            .body(&robot.vehicle)
+            .expect("enabled robot references a registered vehicle");
+        terra::DriveConfig::from_body(selected).unwrap_or_else(|reason| {
+            panic!(
+                "robot '{}' vehicle '{}' cannot drive: {reason}",
+                robot.name, robot.vehicle
+            )
+        });
+        physics::RoverPhysicsConfig::from_body(selected).unwrap_or_else(|reason| {
+            panic!(
+                "robot '{}' vehicle '{}' has an invalid chassis: {reason}",
+                robot.name, robot.vehicle
+            )
+        });
+    }
     let drive = terra::DriveConfig::from_body(body).unwrap_or_else(|reason| {
         panic!(
             "vehicle '{}' cannot be driven by this Zorvane build: {reason}",
@@ -63,7 +92,8 @@ fn main() {
 
     app.insert_resource(vehicle::Vehicles(vehicles))
         .insert_resource(chassis)
-        .insert_resource(terra::RoverFleet::from_env().expect("invalid fleet configuration"))
+        .insert_resource(terra::RoverFleet::from_roster(&roster))
+        .insert_resource(roster)
         .add_plugins((
             TerraPhysicsPlugin,
             TerraWorldPlugin {

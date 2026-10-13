@@ -81,7 +81,8 @@ GPU tests are `#[ignore]`. They write `/tmp/terra-world-preview.png`.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `ZORVANE_VEHICLE` | `terra-ground` | Registered body id. Unknown ids abort startup. |
+| `ZORVANE_VEHICLE` | `terra-ground` | Registered body id shared by default across the fleet. |
+| `ZORVANE_ROBOT_CONFIG` | unset | JSON per-slot enable, name, description, registered type, topic, and color settings. |
 | `ZORVANE_ASSETS` | `simulator/assets` | Asset root. |
 | `ZORVANE_SMOKE` | unset | `1` exits once the schedule is running. |
 | `TERRA_HEADLESS` | unset | `1` runs without a window. |

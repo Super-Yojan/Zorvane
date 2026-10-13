@@ -1,6 +1,6 @@
 # Terra fleet, camera frames, and Zenoh control
 
-**TL;DR.** Prefix `terra/rover`. One peer on `tcp/127.0.0.1:7447`. No router. TerraPhone and ARGOS keep their keys.
+**TL;DR.** Prefix `terra/rover`. Each robot has its own named key space (`robot1`, `robot2`, …). One peer on `tcp/127.0.0.1:7447`.
 
 ```mermaid
 flowchart LR
@@ -17,7 +17,7 @@ flowchart LR
 
 ![Driving from a client](../docs/assets/drive.gif)
 
-*Rover 0 on the NEXT pitch. A `cmd_vel` stream, or the keyboard when Zenoh is off.*
+*robot1 on the NEXT pitch. A `cmd_vel` stream, or the keyboard when Zenoh is off.*
 
 Terra's [mission-autonomy guide](https://github.com/Super-Yojan/Terra/blob/main/docs/autonomy/README.md) still describes the shared arbiter. That document stayed in Terra.
 
@@ -29,12 +29,35 @@ cd /path/to/Zorvane
 TERRA_ROVER_COUNT=3 cargo run -p zorvane
 ```
 
-Every rover has its own physics body, differential-drive controller, odometry,
-front RGB camera, and depth camera. New rovers spawn along the clear roads with
-spacing between their chassis. Live spawning waits if the available road positions
-are occupied. Reducing the count removes the newest rovers and their camera/model
-children. IDs start at zero, remain stable for surviving rovers, and are never
-reused during a run. After shrinking and growing, IDs may have gaps.
+To start the maximum 32-robot fleet using the default Terra body for every
+slot, run `./simulator/tools/run_max_robots.sh` from the repository root. The
+script ignores a configured roster for this run. WASD and Space control only
+robot1 when the Zenoh bridge is disabled; with Zenoh enabled, use per-robot
+commands instead.
+
+Each rover has independent controller state, odometry, RGB and depth cameras,
+autonomy arbiter, goal, and occupancy map. Slots alternate ends of the world:
+robot1 south, robot2 north, robot3 south, and so on. NEXT spawns stay inside the
+pitch. A colored marker and robot name distinguish each rover. `fleet/state`
+lists robot names, types, topic segments, enabled state, and numeric runtime IDs.
+
+Set each slot's enabled state, display name, description, registered vehicle ID,
+topic segment, and optional marker color in an editable JSON roster:
+
+```sh
+cp simulator/robots.example.json simulator/robots.json
+ZORVANE_ROBOT_CONFIG=simulator/robots.json cargo run -p zorvane
+```
+
+Topic segments must be unique. Robot1 commands use `terra/rover/robot1/...`;
+robot2 uses `terra/rover/robot2/...`. While running, publish
+`{"enabled":false}` to `terra/rover/fleet/robot2/enabled` to disable a slot, or
+`{"enabled":true}` to enable it. The Python client supports these toggles.
+Without a roster file, `TERRA_ROVER_COUNT` enables the first N default slots.
+`ZORVANE_VEHICLE` still selects the body for all enabled slots. To add another
+type later, register a `VehicleBody` in `zorvane-vehicle`, then select its ID in
+the roster. With a roster file, its `enabled` flags choose startup slots; leave
+`TERRA_ROVER_COUNT` unset.
 
 The overview camera and on-screen depth preview follow the primary rover in
 spawn slot zero. The current limit is `terra::MAX_ROVERS = 32`; rendering costs
@@ -54,17 +77,29 @@ From the simulator directory, list current rover IDs:
 python3 tools/zenoh_client.py fleet
 ```
 
+To discover keys that are actively publishing, run:
+
+```sh
+python3 tools/zenoh_client.py topics --seconds 5
+```
+
+Zenoh has no ROS-style central topic graph. This listens on `terra/rover/**`
+and lists keys seen during the window; command keys appear only while a client
+publishes to them. `fleet` gives the current robot roster and IDs.
+
 Increase or decrease the fleet during the run, including reducing it to zero:
 
 ```sh
 python3 tools/zenoh_client.py fleet --count 5
 python3 tools/zenoh_client.py fleet --count 2
+python3 tools/zenoh_client.py fleet --robot robot2 --disable
+python3 tools/zenoh_client.py fleet --robot robot2 --enable
 ```
 
 Receive RGB and depth frames for rover zero, or all rovers:
 
 ```sh
-python3 tools/zenoh_client.py --rover 0 frames --output /tmp/terra-frames
+python3 tools/zenoh_client.py --rover robot1 frames --output /tmp/terra-frames
 python3 tools/zenoh_client.py frames --all --output /tmp/terra-frames
 ```
 
@@ -76,22 +111,23 @@ metres; NaN means no valid depth return.
 Drive a particular rover for five seconds. This is the debug twist path:
 
 ```sh
-python3 tools/zenoh_client.py --rover 0 drive --linear 1.0 --angular 0.3 --seconds 5
+python3 tools/zenoh_client.py --rover robot1 drive --linear 1.0 --angular 0.3 --seconds 5
+python3 tools/zenoh_client.py --rover robot2 drive --linear -0.6 --angular 0 --seconds 5
 ```
 
 The client repeats commands at 20 Hz and sends zero on completion or Ctrl-C.
 Forward velocity is in m/s; positive angular velocity turns left in rad/s. Wheel
 speed saturation and Avian collisions still apply. Each rover stops when it has
-no fresh command for 500 ms, or the transport fails. Holding Space stops all
-remote-controlled rovers. Invalid commands do not renew the timeout.
+no fresh command for 500 ms, or the transport fails. Holding Space stops the
+primary slot only. Invalid commands do not renew the timeout.
 
 Send one go-to-waypoint goal instead of streaming twists. Terra latches it and
 drives with the onboard velocity loop. See [Go to waypoint](#go-to-waypoint).
 
 ```sh
-python3 tools/zenoh_client.py --rover 0 goto --x 12 --y -4
-python3 tools/zenoh_client.py --rover 0 goto --lat 38.8299 --lon -77.3075
-python3 tools/zenoh_client.py --rover 0 goto --cancel
+python3 tools/zenoh_client.py --rover robot1 goto --x 12 --y -4
+python3 tools/zenoh_client.py --rover robot2 goto --x -12 --y 4
+python3 tools/zenoh_client.py --rover robot1 goto --cancel
 ```
 
 Zenoh owns driving while enabled. A latched goal overrides debug twists until
@@ -107,17 +143,20 @@ rover. The per-rover keys are:
 
 | Key | Payload |
 | --- | --- |
-| `terra/rover/<id>/cmd_vel` | JSON `{"linear":1.0,"angular":0.3}` (debug twist) |
-| `terra/rover/<id>/goal` | JSON go-to-waypoint, published once and latched |
-| `terra/rover/<id>/goal/status` | JSON progress for the latched goal |
-| `terra/rover/<id>/camera/rgb` | Frame packet, `RGBA8_SRGB` |
-| `terra/rover/<id>/camera/depth` | Frame packet, `32FC1_LE` |
+| `terra/rover/<robot>/cmd_vel` | JSON `{"linear":1.0,"angular":0.3}` (debug twist) |
+| `terra/rover/<robot>/goal` | JSON go-to-waypoint, published once and latched |
+| `terra/rover/<robot>/goal/status` | JSON progress for that robot's goal |
+| `terra/rover/<robot>/camera/rgb` | Frame packet, `RGBA8_SRGB` |
+| `terra/rover/<robot>/camera/depth` | Frame packet, `32FC1_LE` |
 | `terra/rover/fleet/size` | JSON `{"count":3}` |
-| `terra/rover/fleet/state` | JSON `{"count":3,"max_count":32,"ids":[0,1,2]}` |
+| `terra/rover/fleet/<robot>/enabled` | JSON `{"enabled":true}` or `false` |
+| `terra/rover/fleet/state` | Count, IDs, and configured robot names/types/topics/enabled flags |
 
 Fleet state is published on changes and every second for clients that connect
 later. Count is the actual number of spawned rovers; it acknowledges a size
 request once the spawn/removal completes. Commands for inactive IDs are ignored.
+Named topics are preferred. Numeric runtime-ID paths are mirrored for existing
+TerraPhone and ARGOS clients.
 Drive and fleet requests must be valid JSON with exactly the fields above and
 fit within 2048 bytes. Count must be an integer from 0 through 32. Goal
 requests use the same size cap; the accepted shapes are below.
@@ -130,22 +169,22 @@ Decoders live in the Terra crates. A payload that does not decode is ignored.
 
 | Key | What this bridge does with it |
 | --- | --- |
-| `terra/rover/<id>/autonomy` | `decode_level`, then the arbiter's level |
-| `terra/rover/<id>/teleop` | `decode_teleop`, then an operator twist. The in-repo test publishes `{"linear":1,"angular":0}` |
-| `terra/rover/<id>/safety` | `decode_safety`. The in-repo test publishes `{"action":"stop","token":"stop"}` |
-| `terra/rover/<id>/goal/decision` | `decode_decision` on a goal proposal |
-| `terra/rover/<id>/mission/report` | JSON read for a numeric `survivor_id`, reported to the Terra mission model |
+| `terra/rover/<robot>/autonomy` | `decode_level`, then that robot's arbiter level |
+| `terra/rover/<robot>/teleop` | `decode_teleop`, then an operator twist |
+| `terra/rover/<robot>/safety` | `decode_safety` stop/takeover for that robot |
+| `terra/rover/<robot>/goal/decision` | `decode_decision` on that robot's goal proposal |
+| `terra/rover/<robot>/mission/report` | JSON numeric `survivor_id`, reported to the Terra mission model |
 
 About five times a second, and when the controller resets, the bridge publishes
 JSON from those same crates:
 
 | Key | When |
 | --- | --- |
-| `terra/rover/<id>/map/occupancy` | That rover has a depth occupancy snapshot |
-| `terra/rover/<id>/autonomy/status` | The rover is spawned and Zenoh is enabled |
-| `terra/rover/<id>/goal/proposal` | same |
-| `terra/rover/<id>/mission/status` | same |
-| `terra/rover/<id>/experiment/status` | same |
+| `terra/rover/<robot>/map/occupancy` | That robot has a depth occupancy snapshot |
+| `terra/rover/<robot>/autonomy/status` | The robot is spawned and Zenoh is enabled |
+| `terra/rover/<robot>/goal/proposal` | same |
+| `terra/rover/<robot>/mission/status` | same |
+| `terra/rover/<robot>/experiment/status` | same |
 
 `goal/status` is published on that same cadence. Run logs are JSONL under
 `TERRA_RUN_DIR` (default `runs`). `TERRA_MISSION=1` changes the world layout
@@ -157,7 +196,9 @@ set, is parsed as a JSON string into the arbiter's assigned level.
 
 `cmd_vel` remains the debug teleop path: ARGOS or TerraPhone may stream twists,
 and the 500 ms watchdog still applies. The operator contract for a mission goal
-is one message on `terra/rover/<id>/goal`. Terra does not require a refresh.
+is one message on `terra/rover/<robot>/goal`. Set that robot's autonomy level
+to `waypoint` first. The Python `goto` command waits for level status before
+sending the goal. Terra does not require a refresh.
 The follower itself is the `terra-waypoint` crate. TerraPhone imports it as
 `MobileWaypoint` from the UniFFI bundle and runs `step` on the phone, then
 passes the twist to `MobileController`. The simulator does not contain a second
@@ -186,7 +227,7 @@ anchor is loaded; Terra converts it into local metres. Targets outside the
 ground square (one metre inside the edge) are ignored and do not replace the
 current goal. Commands for an id that is not spawned are ignored.
 
-Terra publishes `terra/rover/<id>/goal/status` when the state changes and a few
+Terra publishes `terra/rover/<robot>/goal/status` when the state changes and a few
 times a second while a goal is active:
 
 ```json
@@ -211,11 +252,11 @@ goal is latitude and longitude. About 12 m north of the Johnson Center stays
 clear on the bundled Fairfax patch:
 
 ```sh
-python3 tools/zenoh_client.py --rover 0 goto --lat 38.82981 --lon -77.3075 --token gmu-north
+python3 tools/zenoh_client.py --rover robot1 goto --lat 38.82981 --lon -77.3075 --token gmu-north
 ```
 
-Key `terra/rover/0/goal`, body `{"frame":"wgs84","latitude":38.82981,"longitude":-77.3075,"token":"gmu-north"}`.
-Watch `terra/rover/0/goal/status` for `"state":"arrived"`. `x` and `y` in that
+Key `terra/rover/robot1/goal`, body `{"frame":"wgs84","latitude":38.82981,"longitude":-77.3075,"token":"gmu-north"}`.
+The client sets `waypoint` autonomy first. Watch `terra/rover/robot1/goal/status` for `"state":"arrived"`. `x` and `y` in that
 status are the projected metres, not the command.
 
 ### ARGOS follow-up
@@ -270,7 +311,8 @@ The supplied client connects directly; no separate router is required.
 
 | Environment variable | Purpose |
 | --- | --- |
-| `TERRA_ROVER_COUNT` | Initial count, default 1 |
+| `TERRA_ROVER_COUNT` | Initial count, default 1; ignored when a roster file is set |
+| `ZORVANE_ROBOT_CONFIG` | Optional JSON robot roster; see `robots.example.json` |
 | `TERRA_ZENOH` | Set to `0` to disable the bridge |
 | `TERRA_ZENOH_LISTEN` | Listener endpoint |
 | `TERRA_ZENOH_PREFIX` | Topic prefix |

@@ -6,10 +6,14 @@ import time
 import unittest
 
 import numpy as np
-from zenoh_client import decode_frame, encode_goal
+from zenoh_client import decode_frame, encode_goal, encode_waypoint_level
 
 
 class FrameTests(unittest.TestCase):
+    def test_waypoint_autonomy_is_requested_before_the_goal(self):
+        self.assertEqual(json.loads(encode_waypoint_level("goto-1")), {
+            "level": "waypoint", "token": "goto-1"})
+
     def test_depth_metres_nan_and_row_order(self):
         metadata = {"version": 1, "width": 2, "height": 1, "encoding": "32FC1_LE", "sequence": 3}
         header, image = decode_frame(json.dumps(metadata).encode() + b"\n" + struct.pack("<ff", 2.5, float("nan")))

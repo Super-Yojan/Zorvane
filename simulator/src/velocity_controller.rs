@@ -69,9 +69,10 @@ fn mount_controllers(
     mut commands: Commands,
     config: Res<VelocitySimulationConfig>,
     drive: Res<DriveConfig>,
-    rovers: Query<Entity, Added<Rover>>,
+    rovers: Query<(Entity, Option<&crate::terra::RoverDriveConfig>), Added<Rover>>,
 ) {
-    for entity in &rovers {
+    for (entity, rover_drive) in &rovers {
+        let drive = rover_drive.map_or(drive.as_ref(), |drive| &drive.0);
         let controller_config = ControllerConfig {
             linear_feedforward: (config.linear_drag / (2.0 * config.wheel_force)) as f64,
             yaw_feedforward: (config.yaw_drag / (config.wheel_force * drive.track_width)) as f64,
@@ -103,6 +104,7 @@ type ControlledRovers<'w, 's> = Query<
     's,
     (
         &'static DriveCommand,
+        Option<&'static crate::terra::RoverDriveConfig>,
         Option<&'static crate::zenoh_bridge::AutonomyMotorGate>,
         &'static Rotation,
         &'static Position,
@@ -123,7 +125,7 @@ fn control_and_apply(
     mut rovers: ControlledRovers<'_, '_>,
 ) {
     if !config.enabled {
-        for (_, _, _, _, _, _, _, mut force, mut torque, _, _) in &mut rovers {
+        for (_, _, _, _, _, _, _, _, mut force, mut torque, _, _) in &mut rovers {
             force.0 = Vec3::ZERO;
             torque.0 = Vec3::ZERO;
         }
@@ -136,6 +138,7 @@ fn control_and_apply(
     }
     for (
         request,
+        rover_drive,
         gate,
         rotation,
         position,
@@ -148,6 +151,7 @@ fn control_and_apply(
         mut odometry,
     ) in &mut rovers
     {
+        let drive = rover_drive.map_or(drive.as_ref(), |drive| &drive.0);
         let yaw = rotation.0.to_euler(EulerRot::YXZ).0 as f64;
         let orientation = Quaternion::from_rotation_vector(Vector3 {
             z: yaw,
