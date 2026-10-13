@@ -30,10 +30,10 @@ TERRA_ROVER_COUNT=3 cargo run -p zorvane
 ```
 
 To start the maximum 32-robot fleet using the default Terra body for every
-slot, run `./simulator/tools/run_max_robots.sh` from the repository root. The
-script ignores a configured roster for this run. WASD and Space control only
-robot1 when the Zenoh bridge is disabled; with Zenoh enabled, use per-robot
-commands instead.
+slot, run `python simulator/tools/run_max_robots.py` from the repository root
+(on Windows, use `py simulator/tools/run_max_robots.py`). The script ignores a
+configured roster for this run. WASD and Space control only robot1 when the
+Zenoh bridge is disabled; with Zenoh enabled, use per-robot commands instead.
 
 Each rover has independent controller state, odometry, RGB and depth cameras,
 autonomy arbiter, goal, and occupancy map. Slots alternate ends of the world:
