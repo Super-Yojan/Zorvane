@@ -42,6 +42,6 @@ Headless smoke, no window and no Zenoh:
 TERRA_NEXT=1 TERRA_HEADLESS=1 TERRA_ZENOH=0 ZORVANE_SMOKE=1 cargo run -p zorvane
 ```
 
-`TERRA_NEXT=1` turns off the practice town and Terrarium tiles and sets the ground to a 32 m square. It also takes precedence over `TERRA_MISSION=1`. `TERRA_ROVER_COUNT` enables the first N default slots. For per-slot names, types, topics, colors, and enable switches, set `ZORVANE_ROBOT_CONFIG` to a JSON roster such as `simulator/robots.example.json`. `ZORVANE_VEHICLE` still selects the existing body for every rover by default. `TERRA_HEADLESS=1` runs the same scene without a window.
+`TERRA_NEXT=1` turns off the practice town and Terrarium tiles and sets the field to 105 × 68 m, FIFA's recommended full-size dimensions. The ground collider is rectangular to match the playing surface. It also takes precedence over `TERRA_MISSION=1`. `TERRA_ROVER_COUNT` enables the first N default slots. For per-slot names, types, topics, colors, and enable switches, set `ZORVANE_ROBOT_CONFIG` to a JSON roster such as `simulator/robots.example.json`. `ZORVANE_VEHICLE` still selects the existing body for every rover by default. `TERRA_HEADLESS=1` runs the same scene without a window.
 
 Startup prints a `Terra NEXT:` line with the ball and bucket counts.

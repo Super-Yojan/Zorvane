@@ -20,7 +20,7 @@ The first rover starts at the clear intersection. Extra rovers spawn along the r
 
 Buildings, trunks, pond borders, and hills have colliders. Roads sit on the flat ground collider. Leaves are visual only. The pond has no buoyancy.
 
-`TERRA_NEXT=1` replaces the town with the practice pitch. Robot1 is the south spawn and robot2 is the north spawn; slots alternate ends. Slot zero retains the Zatara gameplay marker on `terra-ground`. See [NEXT.md](NEXT.md).
+`TERRA_NEXT=1` replaces the town with a full-size 105 × 68 m practice pitch, using FIFA's recommended field-of-play dimensions. The ground collider follows the rectangular pitch. Robot1 is the south spawn and robot2 is the north spawn; slots alternate ends. Slot zero retains the Zatara gameplay marker on `terra-ground`. See [NEXT.md](NEXT.md).
 
 ![NEXT practice pitch](../docs/assets/next.png)
 

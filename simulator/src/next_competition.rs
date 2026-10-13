@@ -1,21 +1,23 @@
 //! NEXT competition practice field for Zatara.
 //!
-//! A small-sided soccer pitch with tennis balls and open-front deposit buckets.
-//! Dimensions are a clean practice layout, not an official surveyed field.
+//! A full-size soccer pitch with tennis balls and open-front deposit buckets.
+//! The playing surface uses FIFA's recommended 105 x 68 metre dimensions.
 //! Slot zero keeps the Zatara gameplay marker. Robot display names come from
 //! the editable roster; Zatara is not a separate vehicle type.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-/// Square ground that contains the pitch, boards, and camera apron.
-pub const WORLD_SIZE: f32 = 32.0;
+/// Long side of the FIFA-recommended playing surface, metres.
+pub const WORLD_SIZE: f32 = 105.0;
+/// Short side of the FIFA-recommended playing surface, metres.
+pub const PITCH_WIDTH: f32 = 68.0;
 /// Pitch width along Bevy X, metres.
-pub const PITCH_HALF_WIDTH: f32 = 6.0;
+pub const PITCH_HALF_WIDTH: f32 = PITCH_WIDTH * 0.5;
 /// South goal line. Slot zero starts at this end, facing −Z.
-pub const PITCH_SOUTH: f32 = 5.0;
+pub const PITCH_SOUTH: f32 = WORLD_SIZE * 0.5;
 /// North goal line. Deposit buckets sit inside this end.
-pub const PITCH_NORTH: f32 = PITCH_SOUTH - 18.0;
+pub const PITCH_NORTH: f32 = -WORLD_SIZE * 0.5;
 const BOARD_HEIGHT: f32 = 0.28;
 const BOARD_THICKNESS: f32 = 0.12;
 const MARKING_Y: f32 = 0.008;
@@ -454,8 +456,8 @@ mod tests {
         for pair in balls.windows(2) {
             assert!(pair[0].distance(pair[1]) > 0.5, "{pair:?}");
         }
-        assert!(WORLD_SIZE * 0.5 > PITCH_HALF_WIDTH + 1.0);
-        assert!(WORLD_SIZE * 0.5 > PITCH_SOUTH.abs().max(PITCH_NORTH.abs()) + 1.0);
+        assert_eq!(PITCH_SOUTH - PITCH_NORTH, 105.0);
+        assert_eq!(PITCH_HALF_WIDTH * 2.0, 68.0);
         let mut seen_x = [false; 2];
         for pose in buckets() {
             let bucket = pose.bucket();
@@ -488,6 +490,7 @@ mod tests {
         assert!(!config.landscape.enabled);
         assert!(!config.tiles.enabled);
         assert_eq!(config.size, WORLD_SIZE);
+        assert_eq!(config.ground_dimensions, Vec2::new(PITCH_WIDTH, WORLD_SIZE));
         assert!(config.validate().is_ok());
     }
 

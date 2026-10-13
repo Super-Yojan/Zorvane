@@ -750,16 +750,10 @@ mod tests {
             .unwrap();
         app.update();
         let world = app.world_mut();
-        let mut query = world.query::<(
-            &RoverSlot,
-            &RoverIdentity,
-            Option<&KeyboardControlled>,
-        )>();
+        let mut query = world.query::<(&RoverSlot, &RoverIdentity, Option<&KeyboardControlled>)>();
         let mut second: Vec<_> = query
             .iter(world)
-            .map(|(slot, identity, keyboard)| {
-                (slot.0, identity.topic.as_str(), keyboard.is_some())
-            })
+            .map(|(slot, identity, keyboard)| (slot.0, identity.topic.as_str(), keyboard.is_some()))
             .collect();
         second.sort_by_key(|(slot, _, _)| *slot);
         assert_eq!(second, [(0, "robot1", true), (1, "robot2", false)]);
@@ -806,9 +800,30 @@ mod tests {
     fn next_slots_alternate_pitch_ends_and_remain_inside_without_colliding() {
         let chassis = Vec3::new(0.9, 0.16, 0.8);
         let spacing = chassis.x.max(chassis.z) + 0.6;
-        let south = slot_spawn_offset(0, spacing, chassis, 32.0, true).unwrap();
-        let north = slot_spawn_offset(1, spacing, chassis, 32.0, true).unwrap();
-        let south_again = slot_spawn_offset(2, spacing, chassis, 32.0, true).unwrap();
+        let south = slot_spawn_offset(
+            0,
+            spacing,
+            chassis,
+            crate::next_competition::WORLD_SIZE,
+            true,
+        )
+        .unwrap();
+        let north = slot_spawn_offset(
+            1,
+            spacing,
+            chassis,
+            crate::next_competition::WORLD_SIZE,
+            true,
+        )
+        .unwrap();
+        let south_again = slot_spawn_offset(
+            2,
+            spacing,
+            chassis,
+            crate::next_competition::WORLD_SIZE,
+            true,
+        )
+        .unwrap();
         for pose in [south, north, south_again] {
             assert!(crate::next_competition::on_pitch(
                 pose.x,

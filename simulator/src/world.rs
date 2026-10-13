@@ -66,8 +66,10 @@ impl Plugin for TerraWorldPlugin {
 
 #[derive(Resource, Clone)]
 pub struct WorldConfig {
-    /// Square ground width in metres, centred at the rover's spawn origin.
+    /// Nominal world size in metres, used for square maps and map bounds.
     pub size: f32,
+    /// Ground dimensions (X width, Z length), centred at the rover spawn origin.
+    pub ground_dimensions: Vec2,
     /// Distance between grid lines in metres.
     pub grid_spacing: f32,
     /// Offset from the rover in world coordinates; camera does not rotate with it.
@@ -84,6 +86,7 @@ impl Default for WorldConfig {
     fn default() -> Self {
         Self {
             size: 100.0,
+            ground_dimensions: Vec2::splat(100.0),
             grid_spacing: 5.0,
             camera_offset: Vec3::new(12.0, 18.0, 20.0),
             camera_response: 5.0,
@@ -102,6 +105,7 @@ impl WorldConfig {
             config.size = value
                 .parse()
                 .map_err(|_| "TERRA_WORLD_SIZE must be a number of metres".to_owned())?;
+            config.ground_dimensions = Vec2::splat(config.size);
         }
         config.tiles = crate::geo::GeoTileConfig::from_env()?;
         if crate::next_competition::enabled() {
@@ -126,6 +130,10 @@ impl WorldConfig {
         self.landscape.enabled = false;
         self.show_grid = false;
         self.size = crate::next_competition::WORLD_SIZE;
+        self.ground_dimensions = Vec2::new(
+            crate::next_competition::PITCH_WIDTH,
+            crate::next_competition::WORLD_SIZE,
+        );
         self.camera_offset = Vec3::new(0.0, 12.0, 14.0);
         self.follow_rover = true;
     }
@@ -133,12 +141,14 @@ impl WorldConfig {
     pub fn validate(&self) -> Result<(), &'static str> {
         if !self.size.is_finite()
             || self.size <= 0.0
+            || !self.ground_dimensions.is_finite()
+            || self.ground_dimensions.min_element() <= 0.0
             || !self.grid_spacing.is_finite()
             || self.grid_spacing <= 0.0
         {
             return Err("ground size and grid spacing must be finite and positive");
         }
-        if self.size / self.grid_spacing > 500.0 {
+        if self.ground_dimensions.max_element() / self.grid_spacing > 500.0 {
             return Err("grid must have at most 500 intervals across the ground");
         }
         if !self.camera_offset.is_finite()
@@ -191,6 +201,8 @@ fn generate_world(
         ..default()
     });
     let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
+    let half_width = config.ground_dimensions.x * 0.5;
+    let half_length = config.ground_dimensions.y * 0.5;
     // Top surface at Y=0, matching the rover controller's ground plane.
     commands.spawn((
         Name::new("Terra ground"),
@@ -201,36 +213,47 @@ fn generate_world(
         Restitution::ZERO,
         Mesh3d(cube.clone()),
         MeshMaterial3d(ground_material),
-        Transform::from_xyz(0.0, -0.1, 0.0).with_scale(Vec3::new(config.size, 0.2, config.size)),
+        Transform::from_xyz(0.0, -0.1, 0.0).with_scale(Vec3::new(
+            config.ground_dimensions.x,
+            0.2,
+            config.ground_dimensions.y,
+        )),
     ));
-    let half = config.size / 2.0;
-    let steps = (half / config.grid_spacing).floor() as i32;
+    let x_steps = (half_width / config.grid_spacing).floor() as i32;
+    let z_steps = (half_length / config.grid_spacing).floor() as i32;
     let thickness = (config.grid_spacing * 0.01).min(0.04);
     if config.show_grid {
-        for index in -steps..=steps {
-            let position = index as f32 * config.grid_spacing;
-            for (translation, scale) in [
-                (
-                    Vec3::new(position, 0.002, 0.0),
-                    Vec3::new(thickness, 0.004, config.size),
-                ),
-                (
-                    Vec3::new(0.0, 0.002, position),
-                    Vec3::new(config.size, 0.004, thickness),
-                ),
-            ] {
-                commands.spawn((
-                    Name::new("Distance grid"),
-                    WorldElement,
-                    Mesh3d(cube.clone()),
-                    MeshMaterial3d(grid_material.clone()),
-                    Transform::from_translation(translation).with_scale(scale),
-                ));
-            }
+        for index in -x_steps..=x_steps {
+            let x = index as f32 * config.grid_spacing;
+            commands.spawn((
+                Name::new("Distance grid"),
+                WorldElement,
+                Mesh3d(cube.clone()),
+                MeshMaterial3d(grid_material.clone()),
+                Transform::from_xyz(x, 0.002, 0.0).with_scale(Vec3::new(
+                    thickness,
+                    0.004,
+                    config.ground_dimensions.y,
+                )),
+            ));
+        }
+        for index in -z_steps..=z_steps {
+            let z = index as f32 * config.grid_spacing;
+            commands.spawn((
+                Name::new("Distance grid"),
+                WorldElement,
+                Mesh3d(cube.clone()),
+                MeshMaterial3d(grid_material.clone()),
+                Transform::from_xyz(0.0, 0.002, z).with_scale(Vec3::new(
+                    config.ground_dimensions.x,
+                    0.004,
+                    thickness,
+                )),
+            ));
         }
     }
-    for x in [-half, half] {
-        for z in [-half, half] {
+    for x in [-half_width, half_width] {
+        for z in [-half_length, half_length] {
             commands.spawn((
                 Name::new("World boundary marker"),
                 WorldElement,
@@ -341,6 +364,11 @@ mod tests {
                 .count(),
             4
         );
+        let ground = world
+            .query_filtered::<&Transform, With<Ground>>()
+            .single(world)
+            .unwrap();
+        assert_eq!(ground.scale, Vec3::new(100.0, 0.2, 100.0));
         let count = world
             .query_filtered::<Entity, With<WorldElement>>()
             .iter(world)
@@ -358,6 +386,14 @@ mod tests {
     #[test]
     fn validates_dimensions_and_limits_grid_density() {
         assert!(WorldConfig::default().validate().is_ok());
+        assert!(
+            WorldConfig {
+                ground_dimensions: Vec2::new(68.0, 105.0),
+                ..default()
+            }
+            .validate()
+            .is_ok()
+        );
         assert!(
             WorldConfig {
                 size: -1.0,
