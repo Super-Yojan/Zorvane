@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start Zorvane with the maximum 32 default Terra robots."""
+"""Start Zorvane with 4 default Terra robots."""
 
 import os
 from pathlib import Path
@@ -14,7 +14,7 @@ def main() -> int:
     # A roster overrides TERRA_ROVER_COUNT. Remove it so this launcher always
     # starts the full fleet using the default vehicle configuration.
     environment.pop("ZORVANE_ROBOT_CONFIG", None)
-    environment["TERRA_ROVER_COUNT"] = "32"
+    environment["TERRA_ROVER_COUNT"] = "4"
 
     try:
         return subprocess.run(
