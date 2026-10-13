@@ -8,7 +8,7 @@ import sys
 
 
 def main() -> int:
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[1]
     environment = os.environ.copy()
 
     # A roster overrides TERRA_ROVER_COUNT. Remove it so this launcher always
