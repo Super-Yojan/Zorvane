@@ -63,15 +63,13 @@ Rovers start on the goal lines, just inside the pitch, centred on the goal. Even
 
 ## Deposit buckets
 
-Each bucket is a standard 5-gallon bucket from a user-supplied product diagram. The field model is a slightly tapered open cylinder. The lid is optional and stays off so balls can be dumped in the top.
+Each bucket is a standard 5-gallon bucket from a user-supplied product diagram. The model is a slightly tapered open-top cylinder. Buckets have no lid.
 
 | Quantity | Value | Source |
 | --- | --- | --- |
 | Top diameter | 12 in → **0.3048 m** | User-supplied product diagram. `BUCKET_TOP_DIAMETER` |
 | Base diameter | 11.9 in → **0.3023 m** | Same diagram. `BUCKET_BASE_DIAMETER` |
-| Body height | 13.38 in → **0.3399 m** | Same diagram. `BUCKET_BODY_HEIGHT` |
-| Lid height | 1.41 in → **0.0358 m** | Same diagram. Spawned only when a bucket is marked lidded. `BUCKET_LID_HEIGHT` |
-| Total height | **0.3757 m** | Body plus lid. The diagram’s total is about 0.376 m |
+| Height | 13.38 in → **0.3399 m** | Same diagram, the body height. `BUCKET_BODY_HEIGHT`. User correction: the diagram’s 1.41 in lid is not part of the bucket |
 | Wall thickness | **0.0025 m** | **unsourced.** The diagram gives outer diameters. This shell leaves an open interior |
 | Count | **20** (10 on each half) | User decision. `BUCKETS_PER_HALF` |
 | Placement | Seeded, default seed **42** | **Sim choice, not a rule.** `buckets(seed)` / `TERRA_NEXT_SEED`. Centres stay on the pitch, at least 1.6 m inside each goal line, off the halfway line, and clear of the tennis balls |

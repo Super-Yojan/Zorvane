@@ -48,12 +48,11 @@ pub const TENNIS_BALL_RADIUS: f32 = 0.0335;
 pub const TENNIS_BALL_MASS: f32 = 0.058;
 
 /// 5-gallon bucket, from the user-supplied product diagram (inches × 0.0254).
+/// Open top. The diagram’s lid is not part of the model.
 pub const BUCKET_TOP_DIAMETER: f32 = 0.3048;
 pub const BUCKET_BASE_DIAMETER: f32 = 0.3023;
+/// Body height. There is no lid.
 pub const BUCKET_BODY_HEIGHT: f32 = 0.3399;
-pub const BUCKET_LID_HEIGHT: f32 = 0.0358;
-/// Body plus lid. The field leaves lids off so the top stays open.
-pub const BUCKET_TOTAL_HEIGHT: f32 = BUCKET_BODY_HEIGHT + BUCKET_LID_HEIGHT;
 /// Shell thickness so the open top has an interior. Not on the product diagram.
 const BUCKET_WALL: f32 = 0.0025;
 pub const BUCKETS_PER_HALF: usize = 10;
@@ -90,22 +89,16 @@ pub struct Wall {
     pub size: Vec3,
 }
 
-/// One bucket on the pitch. `lid` is off for the field layout.
+/// One open-top bucket on the pitch.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BucketPlace {
     pub x: f32,
     pub z: f32,
-    pub lid: bool,
 }
 
 impl BucketPlace {
     pub fn open(x: f32, z: f32) -> Self {
-        Self { x, z, lid: false }
-    }
-
-    pub fn with_lid(mut self) -> Self {
-        self.lid = true;
-        self
+        Self { x, z }
     }
 
     pub fn volume(self) -> Bucket {
@@ -330,7 +323,6 @@ fn spawn_field_contents(
     let line = material(materials, Color::srgb(0.95, 0.95, 0.92), 0.7);
     let board = material(materials, Color::srgb(0.90, 0.92, 0.94), 0.55);
     let bucket_color = material(materials, Color::srgb(0.93, 0.94, 0.95), 0.45);
-    let lid_color = material(materials, Color::srgb(0.75, 0.78, 0.80), 0.5);
     let goal_color = material(materials, Color::srgb(0.95, 0.95, 0.96), 0.4);
     let ball_color = material(materials, Color::srgb(0.79, 0.95, 0.10), 0.35);
     let ball_mesh = meshes.add(Sphere::new(TENNIS_BALL_RADIUS).mesh().ico(3).unwrap());
@@ -369,7 +361,6 @@ fn spawn_field_contents(
     }
     spawn_goals(commands, meshes, &goal_color);
     let shell = meshes.add(bucket_shell_mesh());
-    let lid_mesh = meshes.add(Cylinder::new(BUCKET_TOP_DIAMETER * 0.5, BUCKET_LID_HEIGHT));
     for (index, place) in buckets(bucket_seed()).into_iter().enumerate() {
         let bucket = place.volume();
         commands.spawn((
@@ -384,21 +375,6 @@ fn spawn_field_contents(
             MeshMaterial3d(bucket_color.clone()),
             Transform::from_xyz(place.x, 0.0, place.z),
         ));
-        if place.lid {
-            commands.spawn((
-                Name::new("NEXT bucket lid"),
-                NextField,
-                RigidBody::Static,
-                Collider::cylinder(BUCKET_TOP_DIAMETER * 0.5, BUCKET_LID_HEIGHT),
-                Mesh3d(lid_mesh.clone()),
-                MeshMaterial3d(lid_color.clone()),
-                Transform::from_xyz(
-                    place.x,
-                    BUCKET_BODY_HEIGHT + BUCKET_LID_HEIGHT * 0.5,
-                    place.z,
-                ),
-            ));
-        }
     }
     for (index, position) in ball_positions().into_iter().enumerate() {
         commands.spawn((
@@ -709,20 +685,18 @@ mod tests {
         assert!(GOAL_AREA_WIDTH < PENALTY_AREA_WIDTH);
         assert!(PENALTY_AREA_WIDTH < PITCH_WIDTH);
         assert!(PENALTY_AREA_DEPTH * 2.0 < PITCH_LENGTH);
-        assert!((BUCKET_TOTAL_HEIGHT - 0.376).abs() < 0.001);
         assert_eq!(BUCKET_TOP_DIAMETER, 0.3048);
         assert_eq!(BUCKET_BASE_DIAMETER, 0.3023);
+        assert_eq!(BUCKET_BODY_HEIGHT, 0.3399);
         assert!(BUCKET_TOP_DIAMETER > BUCKET_BASE_DIAMETER);
         let open = BucketPlace::open(0.0, 0.0);
-        assert!(!open.lid);
-        assert!(open.with_lid().lid);
+        assert!((open.volume().rim_y - BUCKET_BODY_HEIGHT).abs() < 1e-6);
         let placed = buckets(DEFAULT_BUCKET_SEED);
         assert_eq!(placed.len(), BUCKETS_PER_HALF * 2);
         assert_eq!(buckets(DEFAULT_BUCKET_SEED), placed);
         assert_ne!(buckets(DEFAULT_BUCKET_SEED + 1), placed);
         let mut halves = [0usize, 0];
         for place in &placed {
-            assert!(!place.lid);
             let bucket = place.volume();
             assert!(bucket.contains(bucket.rest), "{place:?}");
             assert!(on_pitch(place.x, place.z, BUCKET_TOP_DIAMETER * 0.5));
