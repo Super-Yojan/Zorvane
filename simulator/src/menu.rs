@@ -146,12 +146,10 @@ fn rebuild_ui(
     }
 }
 
-fn sync_ui_camera(
-    session: Res<SimSession>,
-    world_cameras: Query<(), With<crate::world::WorldCamera>>,
-    mut cameras: Query<&mut Camera, With<UiCamera>>,
-) {
-    let show_world = session.phase != Phase::Menu && !world_cameras.is_empty();
+fn sync_ui_camera(session: Res<SimSession>, mut cameras: Query<&mut Camera, With<UiCamera>>) {
+    // The world camera is spawned with a deferred command, so it can be missing
+    // for the frame that leaves the menu. Stop clearing as soon as we play.
+    let show_world = session.phase != Phase::Menu;
     for mut camera in &mut cameras {
         camera.clear_color = if show_world {
             ClearColorConfig::None

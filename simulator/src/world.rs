@@ -303,7 +303,8 @@ fn generate_world(
         WorldElement,
         DirectionalLight {
             illuminance: 10_000.0,
-            shadow_maps_enabled: true,
+            // WebGL2 software adapters reject the depth copies shadow maps use.
+            shadow_maps_enabled: cfg!(not(target_arch = "wasm32")),
             ..default()
         },
         Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -374,7 +375,11 @@ fn apply_session(world: &mut World) {
         }
     }
     for entity in doomed {
-        world.entity_mut(entity).despawn();
+        // A parent despawn already removes its children. Skip ids that are gone
+        // so a second despawn does not fail the command queue.
+        if world.get_entity(entity).is_ok() {
+            world.entity_mut(entity).despawn();
+        }
     }
     if let Some(mut session) = world.get_resource_mut::<SimSession>() {
         session.note = note;

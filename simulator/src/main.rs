@@ -62,16 +62,19 @@ fn main() {
     }
     mission::install(&mut app);
     next_competition::install(&mut app);
-    let mut assets = AssetPlugin {
-        file_path: asset_root(),
-        ..default()
-    };
     // A static host has no .meta sidecars. Skipping the lookup avoids a 404
     // before each asset, including the 118 MB rover mesh.
     #[cfg(target_arch = "wasm32")]
-    {
-        assets.meta_check = bevy::asset::AssetMetaCheck::Never;
-    }
+    let assets = AssetPlugin {
+        file_path: asset_root(),
+        meta_check: bevy::asset::AssetMetaCheck::Never,
+        ..default()
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let assets = AssetPlugin {
+        file_path: asset_root(),
+        ..default()
+    };
     let defaults = DefaultPlugins.set(assets);
     if std::env::var("TERRA_HEADLESS").as_deref() == Ok("1") {
         app.add_plugins(
@@ -121,6 +124,12 @@ fn main() {
     if std::env::var("ZORVANE_SMOKE").as_deref() == Ok("1") {
         app.add_systems(Update, smoke_exit);
     }
+    // Rebuilding a world despawns entities that a queued UI command may still
+    // name. On wasm that panic aborts the module; log it and keep rendering.
+    #[cfg(target_arch = "wasm32")]
+    app.insert_resource(bevy::ecs::error::FallbackErrorHandler(
+        bevy::ecs::error::warn,
+    ));
     app.run();
 }
 
