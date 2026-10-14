@@ -18,7 +18,10 @@ impl Plugin for TerraPlugin {
         app.insert_resource(self.config.clone())
             .init_resource::<RoverFleet>()
             .add_systems(PreUpdate, reconcile_fleet)
-            .add_systems(FixedUpdate, keyboard_command)
+            .add_systems(
+                FixedUpdate,
+                keyboard_command.run_if(crate::session::drive_allowed),
+            )
             .add_systems(
                 FixedPostUpdate,
                 drive
@@ -207,8 +210,12 @@ pub(crate) fn reconcile_fleet(
     mut fleet: ResMut<RoverFleet>,
     world: Option<Res<crate::world::WorldConfig>>,
     vehicles: Option<Res<crate::vehicle::Vehicles>>,
+    session: Option<Res<crate::session::SimSession>>,
     rovers: Query<(Entity, &RoverId, &RoverSlot, &Transform), With<Rover>>,
 ) {
+    if session.is_some_and(|session| session.phase == crate::session::Phase::Menu) {
+        return;
+    }
     let mut existing: Vec<_> = rovers.iter().collect();
     existing.sort_by_key(|(_, id, _, _)| id.0);
     if existing.len() > fleet.count() {
@@ -219,15 +226,31 @@ pub(crate) fn reconcile_fleet(
     }
     let mut occupied: std::collections::BTreeSet<_> =
         existing.iter().map(|(_, _, slot, _)| slot.0).collect();
-    let spacing = physics.chassis_size.x.max(physics.chassis_size.z) + 0.6;
+    let next_field = world
+        .as_ref()
+        .is_some_and(|world| world.scene == crate::world::SceneKind::Next);
+    let fleet_count = fleet.count();
+    let spacing = if next_field {
+        physics.chassis_size.x + 0.2
+    } else {
+        physics.chassis_size.x.max(physics.chassis_size.z) + 0.6
+    };
     let max_distance = world.as_ref().map_or(100.0, |world| world.size) * 0.38;
-    let available_slots = 1 + 4 * (max_distance / spacing).floor() as usize;
+    let available_slots = if next_field {
+        fleet_count.max(1)
+    } else {
+        1 + 4 * (max_distance / spacing).floor() as usize
+    };
     let mut positions: Vec<_> = existing
         .iter()
         .map(|(_, _, _, pose)| pose.translation.with_y(0.0))
         .collect();
     let offset_for = |slot: usize| {
-        if slot == 0 {
+        if next_field {
+            crate::next_competition::rover_spawn(slot, fleet_count, physics.chassis_size)
+                .0
+                .with_y(0.0)
+        } else if slot == 0 {
             Vec3::ZERO
         } else {
             let distance = ((slot - 1) / 4 + 1) as f32 * spacing;
@@ -270,7 +293,12 @@ pub(crate) fn reconcile_fleet(
             WheelSpeeds::default(),
             Odometry::default(),
             RoverBody::new(&physics),
-            Transform::from_translation(offset + Vec3::Y * (physics.chassis_size.y / 2.0 + 0.02)),
+            Transform::from_translation(offset + Vec3::Y * (physics.chassis_size.y / 2.0 + 0.02))
+                .with_rotation(if next_field {
+                    crate::next_competition::rover_spawn(slot, fleet_count, physics.chassis_size).1
+                } else {
+                    Quat::IDENTITY
+                }),
         ));
         if slot == 0 {
             rover.insert(KeyboardControlled);

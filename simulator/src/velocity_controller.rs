@@ -8,6 +8,15 @@ use terra_types::{
     ImuSample, MotorOutput, Quaternion, StopReason, Vector3, VelocityTarget, VioSample,
 };
 
+#[cfg(feature = "native")]
+use crate::zenoh_bridge::AutonomyMotorGate;
+#[cfg(not(feature = "native"))]
+#[derive(Component)]
+struct AutonomyMotorGate {
+    hold: bool,
+    reset: bool,
+}
+
 #[derive(Resource, Clone)]
 pub struct VelocitySimulationConfig {
     pub enabled: bool,
@@ -103,7 +112,7 @@ type ControlledRovers<'w, 's> = Query<
     's,
     (
         &'static DriveCommand,
-        Option<&'static crate::zenoh_bridge::AutonomyMotorGate>,
+        Option<&'static AutonomyMotorGate>,
         &'static Rotation,
         &'static Position,
         &'static LinearVelocity,
@@ -218,7 +227,7 @@ fn control_and_apply(
 mod tests {
     use super::*;
     use crate::{
-        physics::{RoverBody, TerraPhysicsPlugin},
+        physics::{RoverBody, RoverPhysicsConfig, TerraPhysicsPlugin},
         terra::{DriveCommand, DriveConfig, Odometry, Rover, WheelSpeeds},
     };
     #[test]
@@ -255,7 +264,11 @@ mod tests {
                 },
                 WheelSpeeds::default(),
                 Odometry::default(),
-                Transform::from_xyz(0.0, 0.1, 0.0),
+                Transform::from_xyz(
+                    0.0,
+                    RoverPhysicsConfig::default().chassis_size.y * 0.5 + 0.02,
+                    0.0,
+                ),
             ))
             .id();
         for _ in 0..800 {

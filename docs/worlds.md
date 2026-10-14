@@ -15,7 +15,7 @@
 
 ![NEXT pitch](assets/next.png)
 
-*32 m square. Zatara faces two buckets. Six tennis balls.*
+*105 m by 68 m pitch. Zatara starts on the south goal line. Twenty open buckets.*
 
 | Order | Switch | Layout |
 | --- | --- | --- |
@@ -23,6 +23,8 @@
 | 2 | `TERRA_MISSION=1` | Flat 100 m square and seeded rubble. |
 | 3 | `TERRA_TILES=1` | Elevation around the anchor. A failed load falls back to the town. |
 | 4 | none | Practice town. |
+
+A windowed run starts on a menu that loads one of the three worlds below. `ZORVANE_MENU=0`, headless, and smoke skip that screen and use the switches.
 
 Startup prints `Zorvane vehicle: Terra (terra-ground)`.
 Tiles add a `Terra tiles:` line. NEXT adds a `Terra NEXT:` line.
@@ -58,8 +60,8 @@ TERRA_NEXT=1 cargo run -p zorvane
 
 Zatara is spawn slot 0 of `terra-ground`. Same chassis. New name.
 
-Push a ball into a bucket. Past the mouth, a pull holds it against the back wall.
-The opening is wider than the rover. The scene does not keep score.
+Drop a ball into an open bucket. Once it is through the rim, a pull holds it in the middle.
+The scene does not keep score. Rovers line up on the goal lines, split by end.
 
 Field notes: [NEXT field](reference/next.md).
 

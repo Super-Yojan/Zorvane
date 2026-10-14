@@ -1,7 +1,17 @@
 //! Seeded practice world with roads, buildings, forests, water and voxel hills.
-use crate::{landscape::LandscapeConfig, terra::Rover};
+use crate::{landscape::LandscapeConfig, session::SimSession, terra::Rover};
 use avian3d::prelude::*;
 use bevy::prelude::*;
+
+/// Which authored scene `WorldConfig` describes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SceneKind {
+    #[default]
+    Town,
+    Tiles,
+    Next,
+    Mission,
+}
 
 #[derive(Default)]
 pub struct TerraWorldPlugin {
@@ -10,8 +20,12 @@ pub struct TerraWorldPlugin {
 
 impl Plugin for TerraWorldPlugin {
     fn build(&self, app: &mut App) {
+        let menu = app
+            .world()
+            .get_resource::<SimSession>()
+            .is_some_and(|session| session.phase == crate::session::Phase::Menu);
         let mut config = self.config.clone();
-        let tiles_requested = config.tiles.enabled;
+        let tiles_requested = config.tiles.enabled && !menu;
         if tiles_requested {
             // The practice town is replaced only after a tile patch actually loads.
             config.landscape.enabled = false;
@@ -36,6 +50,7 @@ impl Plugin for TerraWorldPlugin {
                 Err(error) => {
                     eprintln!("Terra tiles: {error}. Continuing with the flat practice world.");
                     config.tiles.enabled = false;
+                    config.scene = SceneKind::Town;
                     config.landscape = self.config.landscape.clone();
                     if config.validate().is_err() {
                         config.landscape.enabled = false;
@@ -46,9 +61,26 @@ impl Plugin for TerraWorldPlugin {
         } else {
             None
         };
-        crate::landscape::install(app, &config);
+        crate::landscape::install(app, &config, menu);
         if patch.is_some() {
             app.add_systems(Startup, crate::geo::spawn_patch);
+        }
+        if menu {
+            app.add_systems(
+                Update,
+                (
+                    apply_session,
+                    generate_world,
+                    crate::landscape::generate_landscape,
+                    crate::next_competition::spawn_field,
+                    crate::geo::spawn_patch,
+                    finish_rebuild,
+                )
+                    .chain()
+                    .run_if(resource_exists::<crate::session::RebuildWorld>),
+            );
+        } else {
+            app.add_systems(Startup, generate_world);
         }
         app.insert_resource(config)
             .insert_resource(ClearColor(Color::srgb(0.65, 0.78, 0.88)))
@@ -56,7 +88,6 @@ impl Plugin for TerraWorldPlugin {
                 brightness: 220.0,
                 ..default()
             })
-            .add_systems(Startup, generate_world)
             .add_systems(PostUpdate, follow_rover.before(TransformSystems::Propagate));
         if let Some(patch) = patch {
             app.insert_resource(patch);
@@ -78,6 +109,7 @@ pub struct WorldConfig {
     pub show_grid: bool,
     pub landscape: LandscapeConfig,
     pub tiles: crate::geo::GeoTileConfig,
+    pub scene: SceneKind,
 }
 
 impl Default for WorldConfig {
@@ -91,6 +123,7 @@ impl Default for WorldConfig {
             show_grid: false,
             landscape: LandscapeConfig::default(),
             tiles: crate::geo::GeoTileConfig::default(),
+            scene: SceneKind::Town,
         }
     }
 }
@@ -110,6 +143,9 @@ impl WorldConfig {
             config.tiles.enabled = false;
             config.landscape.enabled = false;
             config.size = 100.;
+            config.scene = SceneKind::Mission;
+        } else if config.tiles.enabled {
+            config.scene = SceneKind::Tiles;
         }
         if let Ok(seed) = std::env::var("TERRA_MISSION_SEED") {
             config.landscape.seed = seed
@@ -126,8 +162,10 @@ impl WorldConfig {
         self.landscape.enabled = false;
         self.show_grid = false;
         self.size = crate::next_competition::WORLD_SIZE;
-        self.camera_offset = Vec3::new(0.0, 12.0, 14.0);
+        // Behind the south goal, close enough to see the rover between the posts.
+        self.camera_offset = Vec3::new(0.0, 3.2, 5.5);
         self.follow_rover = true;
+        self.scene = SceneKind::Next;
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -244,24 +282,118 @@ fn generate_world(
             ));
         }
     }
-    commands.spawn((
-        Name::new("Terra world camera"),
-        WorldElement,
-        WorldCamera,
-        bevy_voxel_world::prelude::VoxelWorldCamera::<crate::voxel_terrain::TerraVoxelTerrain>::default(),
-        Camera3d::default(),
-        Transform::from_translation(config.camera_offset).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
+    let camera = commands
+        .spawn((
+            Name::new("Terra world camera"),
+            WorldElement,
+            WorldCamera,
+            Camera3d::default(),
+            Transform::from_translation(config.camera_offset).looking_at(Vec3::ZERO, Vec3::Y),
+        ))
+        .id();
+    #[cfg(not(feature = "native"))]
+    let _ = camera;
+    #[cfg(feature = "native")]
+    commands
+        .entity(camera)
+        .insert(bevy_voxel_world::prelude::VoxelWorldCamera::<
+            crate::voxel_terrain::TerraVoxelTerrain,
+        >::default());
     commands.spawn((
         Name::new("Sun"),
         WorldElement,
         DirectionalLight {
             illuminance: 10_000.0,
-            shadow_maps_enabled: true,
+            // WebGL2 software adapters reject the depth copies shadow maps use.
+            shadow_maps_enabled: cfg!(not(target_arch = "wasm32")),
             ..default()
         },
         Transform::from_xyz(4.0, 8.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+}
+
+fn apply_session(world: &mut World) {
+    let Some(session) = world.get_resource::<SimSession>().cloned() else {
+        return;
+    };
+    let mut config = WorldConfig::for_choice(session.world);
+    let mut note = String::new();
+    if config.tiles.enabled {
+        match crate::geo::load_patch(&config.tiles, config.size) {
+            Ok(patch) => {
+                eprintln!(
+                    "Terra tiles: {} cells around {:.5}, {:.5} zoom {} ({} obstacles, origin elevation {:.1} m)",
+                    patch.cells.len(),
+                    patch.anchor.latitude,
+                    patch.anchor.longitude,
+                    patch.anchor.zoom,
+                    patch.cells.iter().filter(|cell| cell.obstacle).count(),
+                    patch.origin_elevation
+                );
+                world.insert_resource(patch);
+            }
+            Err(error) => {
+                note = format!("Tiles did not load ({error}). Showing the practice town.");
+                eprintln!("Terra tiles: {error}. Continuing with the flat practice world.");
+                config = WorldConfig::for_choice(crate::session::WorldChoice::Town);
+            }
+        }
+    } else {
+        world.remove_resource::<crate::geo::GeoPatch>();
+    }
+    if config.validate().is_err() {
+        note = "That world configuration was rejected. Showing the practice town.".into();
+        config = WorldConfig::for_choice(crate::session::WorldChoice::Town);
+    }
+    world.insert_resource(config.clone());
+    if let Some(mut fleet) = world.get_resource_mut::<crate::terra::RoverFleet>() {
+        let _ = fleet.set_count(session.rover_count);
+    }
+    #[cfg(feature = "native")]
+    if let Some(mut terrain) = world.get_resource_mut::<crate::voxel_terrain::TerraVoxelTerrain>() {
+        terrain.enabled = config.scene == SceneKind::Town && config.landscape.voxel_hills;
+        terrain.size = config.size;
+        terrain.seed = config.landscape.seed;
+    }
+    let mut doomed = Vec::new();
+    {
+        let mut query = world.query_filtered::<Entity, Or<(
+            With<WorldElement>,
+            With<Rover>,
+            With<crate::next_competition::NextField>,
+            With<crate::mission::MissionObstacle>,
+        )>>();
+        for entity in query.iter(world) {
+            doomed.push(entity);
+        }
+    }
+    #[cfg(feature = "native")]
+    {
+        let mut query =
+            world.query_filtered::<Entity, With<crate::voxel_terrain::VoxelTerrainChunk>>();
+        for entity in query.iter(world) {
+            doomed.push(entity);
+        }
+    }
+    for entity in doomed {
+        // A parent despawn already removes its children. Skip ids that are gone
+        // so a second despawn does not fail the command queue.
+        if world.get_entity(entity).is_ok() {
+            world.entity_mut(entity).despawn();
+        }
+    }
+    if let Some(mut session) = world.get_resource_mut::<SimSession>() {
+        session.note = note;
+        session.world = match config.scene {
+            SceneKind::Next => crate::session::WorldChoice::Next,
+            SceneKind::Tiles => crate::session::WorldChoice::Tiles,
+            _ => crate::session::WorldChoice::Town,
+        };
+    }
+}
+
+fn finish_rebuild(mut commands: Commands) {
+    commands.remove_resource::<crate::session::RebuildWorld>();
 }
 
 type FollowRovers<'w, 's> = Query<
@@ -382,6 +514,67 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+    #[test]
+    fn menu_defers_the_world_until_rebuild() {
+        let mut app = headless();
+        app.insert_resource(crate::session::SimSession::at_menu(
+            crate::session::WorldChoice::Next,
+            2,
+        ))
+        .add_plugins(TerraWorldPlugin::default());
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<Ground>>()
+                .iter(world)
+                .count(),
+            0
+        );
+        {
+            let mut session = world.resource_mut::<crate::session::SimSession>();
+            session.phase = crate::session::Phase::Playing;
+        }
+        app.insert_resource(crate::session::RebuildWorld);
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<Ground>>()
+                .iter(world)
+                .count(),
+            1
+        );
+        assert_eq!(
+            world
+                .query::<&crate::next_competition::TennisBall>()
+                .iter(world)
+                .count(),
+            crate::next_competition::ball_positions().len()
+        );
+        assert!(
+            world
+                .query::<&crate::landscape::Building>()
+                .iter(world)
+                .next()
+                .is_none()
+        );
+    }
+    #[test]
+    fn choice_configs_select_town_tiles_and_next() {
+        let town = WorldConfig::for_choice(crate::session::WorldChoice::Town);
+        assert_eq!(town.scene, SceneKind::Town);
+        assert!(town.landscape.enabled);
+        assert!(!town.tiles.enabled);
+        let tiles = WorldConfig::for_choice(crate::session::WorldChoice::Tiles);
+        assert_eq!(tiles.scene, SceneKind::Tiles);
+        assert!(tiles.tiles.enabled);
+        assert!(!tiles.landscape.enabled);
+        let next = WorldConfig::for_choice(crate::session::WorldChoice::Next);
+        assert_eq!(next.scene, SceneKind::Next);
+        assert_eq!(next.size, crate::next_competition::WORLD_SIZE);
+        assert!(!next.landscape.enabled);
     }
     #[test]
     fn camera_follows_rover_and_handles_missing_rover() {

@@ -27,7 +27,8 @@ sudo apt-get install -y pkg-config build-essential \
     ```sh
     cargo run -p zorvane
     ```
-    W A S D drive only when Zenoh is off (`TERRA_ZENOH=0`).
+    A start screen picks the practice town, the elevation tiles, or the NEXT pitch, and the rover count (1–8). Esc pauses. `TERRA_NEXT=1` or `TERRA_TILES=1` only highlights that world; Start still loads it. `ZORVANE_MENU=0` skips the screen and spawns immediately, which is what headless and smoke runs do.
+    W A S D drive only when Zenoh is off (`TERRA_ZENOH=0`) and the world is running.
     With Zenoh on, hold Space to zero the wheels.
 
 !!! example "Headless"
@@ -84,15 +85,17 @@ GPU tests are `#[ignore]`. They write `/tmp/terra-world-preview.png`.
 | `ZORVANE_VEHICLE` | `terra-ground` | Registered body id. Unknown ids abort startup. |
 | `ZORVANE_ASSETS` | `simulator/assets` | Asset root. |
 | `ZORVANE_SMOKE` | unset | `1` exits once the schedule is running. |
+| `ZORVANE_MENU` | on for a window | `0` skips the start screen. Headless and smoke already skip it. |
 | `TERRA_HEADLESS` | unset | `1` runs without a window. |
 | `TERRA_NEXT` | off | NEXT pitch. Wins over tiles and mission. |
+| `TERRA_NEXT_SEED` | `42` | Bucket layout seed. Same seed, same twenty places. |
 | `TERRA_TILES` | off | Terrarium elevation patch. |
 | `TERRA_LAT` | `38.8297` | Tile anchor, degrees. |
 | `TERRA_LON` | `-77.3075` | Tile anchor. Johnson Center. |
 | `TERRA_ZOOM` | `15` | Slippy zoom, 9 through 15. |
 | `TERRA_TILES_FETCH` | on | `0` uses cache and the bundled tile only. |
 | `TERRA_TILE_CACHE` | `simulator/.cache/tiles` | Tile cache. |
-| `TERRA_WORLD_SIZE` | `100` | Metres. NEXT forces 32. Tiles need 40–512. |
+| `TERRA_WORLD_SIZE` | `100` | Metres. NEXT forces 120. Tiles need 40–512. |
 | `TERRA_MISSION` | off | `1` loads seeded rubble on a flat square. |
 | `TERRA_MISSION_SEED` | `42` | Landscape seed and rubble seed. |
 | `TERRA_ROVER_COUNT` | `1` | Fleet size, 0 through 32. |
@@ -106,4 +109,12 @@ GPU tests are `#[ignore]`. They write `/tmp/terra-world-preview.png`.
 | `TERRA_ZENOH_TEST_PYTHON` | unset | Interpreter for the ignored round-trip test. |
 | `TERRA_TEST_ZENOH_ENDPOINT` | unset | Enables the live Python socket test. |
 
-World layouts: [Worlds](worlds.md).
+The same window runs in a browser after a merge to `main` publishes it: <https://super-yojan.dev/Zorvane/play/>. That build has no Zenoh and no voxel hills. The elevation view uses the bundled Terrarium PNG. `rover.glb` is about 118 MB, so the mesh appears after that download.
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install trunk
+cd simulator && trunk serve --no-default-features
+```
+
+World layouts: [Worlds](worlds.md). Scale table: the repo `SCALE.md`.

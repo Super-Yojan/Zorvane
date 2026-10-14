@@ -4,7 +4,14 @@ use bevy::prelude::*;
 #[derive(Component)]
 pub struct MissionObstacle;
 pub fn install(app: &mut App) {
-    if std::env::var("TERRA_MISSION").as_deref() == Ok("1") && !crate::next_competition::enabled() {
+    let menu = app
+        .world()
+        .get_resource::<crate::session::SimSession>()
+        .is_some_and(|session| session.phase == crate::session::Phase::Menu);
+    if !menu
+        && std::env::var("TERRA_MISSION").as_deref() == Ok("1")
+        && !crate::next_competition::enabled()
+    {
         app.add_systems(Startup, spawn_layout);
     }
 }

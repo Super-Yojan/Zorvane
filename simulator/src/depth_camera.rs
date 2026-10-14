@@ -50,6 +50,9 @@ impl Plugin for TerraDepthCameraPlugin {
                 PostUpdate,
                 stamp_exposures.after(TransformSystems::Propagate),
             );
+        // WebGL2 cannot copy a depth texture into a buffer. The browser build
+        // keeps the overview camera and skips the sensor readback.
+        #[cfg(not(target_arch = "wasm32"))]
         if app.get_sub_app(RenderApp).is_some() {
             app.add_plugins((
                 ExtractComponentPlugin::<DepthCamera>::default(),
@@ -695,12 +698,17 @@ mod tests {
             .id();
         app.update();
         let world = app.world_mut();
+        let half_length = world.resource::<RoverPhysicsConfig>().chassis_size.z * 0.5;
         let (parent, local, global) = world
             .query_filtered::<(&ChildOf, &Transform, &GlobalTransform), With<DepthCamera>>()
             .single(world)
             .unwrap();
         assert_eq!(parent.parent(), rover);
-        assert!(local.translation.z < -0.4);
+        assert!(
+            local.translation.z < -half_length,
+            "depth camera should sit in front of the chassis, got {}",
+            local.translation.z
+        );
         assert!((global.translation().x - 2.0).abs() < 1e-5);
         world.get_mut::<Transform>(rover).unwrap().rotation =
             Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);

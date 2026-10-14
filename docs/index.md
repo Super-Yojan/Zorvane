@@ -20,15 +20,15 @@ Part of [super-yojan.dev](https://super-yojan.dev). Source: [Super-Yojan/Zorvane
 
 ![NEXT practice pitch](assets/next.png)
 
-*Competition practice. `TERRA_NEXT=1`. Zatara, six balls, two buckets.*
+*Competition pitch. `TERRA_NEXT=1`. Zatara on the south goal line, six balls, twenty buckets.*
 
 | Switch | You get |
 | --- | --- |
 | *(none)* | Practice town, 100 m |
 | `TERRA_TILES=1` | Elevation patch around a map anchor |
-| `TERRA_NEXT=1` | NEXT pitch, 32 m |
+| `TERRA_NEXT=1` | NEXT pitch, 105 × 68 m |
 
-More on [Worlds](worlds.md).
+A windowed run opens a start screen for those three worlds. The browser build is [Zorvane play](https://super-yojan.dev/Zorvane/play/). More on [Worlds](worlds.md) and [Running](running.md).
 
 ## Who talks to whom
 
