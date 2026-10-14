@@ -29,6 +29,7 @@ REPLACEMENTS = (
     ("](simulator/WORLD.md)", "](world.md)"),
     ("](../VEHICLES.md)", "](vehicles.md)"),
     ("](VEHICLES.md)", "](vehicles.md)"),
+    ("](../SCALE.md)", "](scale.md)"),
     ("](SCALE.md)", "](scale.md)"),
     ("](MIGRATION.md)", "](migration.md)"),
     ("](ZENOH.md", "](zenoh.md"),
