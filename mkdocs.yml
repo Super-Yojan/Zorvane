@@ -86,6 +86,7 @@ nav:
       - Town and tiles: reference/world.md
       - NEXT field: reference/next.md
   - Vehicle bodies: reference/vehicles.md
+  - Scale: reference/scale.md
   - Zenoh: reference/zenoh.md
   - Python client: python-client.md
   - Depth camera: reference/depth-camera.md

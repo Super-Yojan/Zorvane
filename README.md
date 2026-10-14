@@ -37,6 +37,10 @@ sudo apt-get install -y pkg-config build-essential \
 cargo run -p zorvane
 ```
 
+The window opens on a start screen (practice town, elevation tiles, or the NEXT pitch, plus a rover count). Esc pauses. `ZORVANE_MENU=0` skips it. Headless and smoke runs skip it on their own.
+
+After this lands on `main`, the same UI is a static page at <https://super-yojan.dev/Zorvane/play/> (no Zenoh, no voxel hills). Dimensions and sources are in [SCALE.md](SCALE.md).
+
 The normal build includes Terra's A* waypoint routing; no adjacent Terra
 checkout or local launcher is required. With Zenoh enabled, select `waypoint`
 autonomy and send a goal through the existing rover topics. The rover plans

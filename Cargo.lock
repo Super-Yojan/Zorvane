@@ -10641,6 +10641,7 @@ dependencies = [
  "bevy_voxel_world",
  "bevy_water",
  "bevytiles",
+ "console_error_panic_hook",
  "fastrand",
  "serde",
  "serde_json",

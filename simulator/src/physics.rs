@@ -172,7 +172,8 @@ mod tests {
             .translation
             .x = 10.0;
         tick(&mut app, 180);
-        assert!((app.world().get::<Position>(entity).unwrap().y - 0.08).abs() < 0.03);
+        let rest_y = RoverPhysicsConfig::default().chassis_size.y * 0.5;
+        assert!((app.world().get::<Position>(entity).unwrap().y - rest_y).abs() < 0.03);
         let world = app.world_mut();
         assert_eq!(
             world
@@ -217,7 +218,8 @@ mod tests {
         let entity = rover(&mut app, DriveCommand::default());
         tick(&mut app, 180);
         let position = app.world().get::<Position>(entity).unwrap().0;
-        assert!((position.y - 0.08).abs() < 0.03, "{position:?}");
+        let rest_y = RoverPhysicsConfig::default().chassis_size.y * 0.5;
+        assert!((position.y - rest_y).abs() < 0.03, "{position:?}");
         assert!(app.world().get::<LinearVelocity>(entity).unwrap().y.abs() < 0.1);
     }
 

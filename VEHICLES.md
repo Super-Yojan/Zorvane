@@ -52,9 +52,11 @@ Do not fork the town, the tile world, or the Zenoh key layout per vehicle.
 `TerraGround` (`id = terra-ground`) is the chassis extracted from Terra's
 simulator:
 
-- asset `simulator/assets/models/rover.glb` (Git LFS)
-- cuboid 0.9 m × 0.16 m × 0.8 m, 20 kg, visual scale 0.025
-- wheel radius 0.15 m, track 0.6 m, wheel limit 20 rad/s
+- asset `simulator/assets/models/rover.glb` (Git LFS), a Blender glTF of the CAD model, in inches
+- cuboid 1.023 m × 0.367 m × 0.977 m (the mesh bounds × 0.0254), 20 kg, visual scale 0.0254
+- wheel radius 0.115 m, track 0.890 m, wheel limit 20 rad/s
+
+Mass and the wheel-speed limit are not on the mesh. Sources and the numbers that are still unsourced are in [SCALE.md](SCALE.md).
 
 Those numbers used to be `DriveConfig::default` and `RoverPhysicsConfig::default`
 inside the simulator. Both defaults now read `TerraGround`, so tests and an

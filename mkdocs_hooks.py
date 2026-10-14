@@ -19,6 +19,7 @@ SOURCES = {
     "next.md": ROOT / "simulator" / "NEXT.md",
     "zenoh.md": ROOT / "simulator" / "ZENOH.md",
     "depth-camera.md": ROOT / "simulator" / "DEPTH_CAMERA.md",
+    "scale.md": ROOT / "SCALE.md",
 }
 
 # Longer patterns first so a prefix is not rewritten twice.
@@ -28,6 +29,7 @@ REPLACEMENTS = (
     ("](simulator/WORLD.md)", "](world.md)"),
     ("](../VEHICLES.md)", "](vehicles.md)"),
     ("](VEHICLES.md)", "](vehicles.md)"),
+    ("](SCALE.md)", "](scale.md)"),
     ("](MIGRATION.md)", "](migration.md)"),
     ("](ZENOH.md", "](zenoh.md"),
     ("](NEXT.md)", "](next.md)"),

@@ -33,10 +33,14 @@ pub fn enabled() -> bool {
 }
 
 pub fn install(app: &mut App) {
-    if enabled() {
-        app.add_systems(Startup, spawn_field)
-            .add_systems(Update, name_zatara)
-            .add_systems(FixedUpdate, settle_deposits);
+    let menu = app
+        .world()
+        .get_resource::<crate::session::SimSession>()
+        .is_some_and(|session| session.phase == crate::session::Phase::Menu);
+    app.add_systems(Update, name_zatara)
+        .add_systems(FixedUpdate, settle_deposits);
+    if enabled() && !menu {
+        app.add_systems(Startup, spawn_field);
     }
 }
 
@@ -199,10 +203,22 @@ pub struct PitchBoard;
 #[derive(Component)]
 pub struct Zatara;
 
-fn spawn_field(
+pub(crate) fn spawn_field(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    config: Option<Res<crate::world::WorldConfig>>,
+) {
+    if config.is_some_and(|config| config.scene != crate::world::SceneKind::Next) {
+        return;
+    }
+    spawn_field_contents(&mut commands, &mut meshes, &mut materials);
+}
+
+fn spawn_field_contents(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
 ) {
     let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
     let material = |materials: &mut Assets<StandardMaterial>, color, roughness| {
@@ -212,12 +228,12 @@ fn spawn_field(
             ..default()
         })
     };
-    let grass = material(&mut materials, Color::srgb(0.18, 0.52, 0.22), 0.95);
-    let line = material(&mut materials, Color::srgb(0.95, 0.95, 0.92), 0.7);
-    let board = material(&mut materials, Color::srgb(0.90, 0.92, 0.94), 0.55);
-    let bucket_color = material(&mut materials, Color::srgb(0.93, 0.68, 0.08), 0.45);
-    let bucket_floor = material(&mut materials, Color::srgb(0.72, 0.48, 0.05), 0.6);
-    let ball_color = material(&mut materials, Color::srgb(0.79, 0.95, 0.10), 0.35);
+    let grass = material(materials, Color::srgb(0.18, 0.52, 0.22), 0.95);
+    let line = material(materials, Color::srgb(0.95, 0.95, 0.92), 0.7);
+    let board = material(materials, Color::srgb(0.90, 0.92, 0.94), 0.55);
+    let bucket_color = material(materials, Color::srgb(0.93, 0.68, 0.08), 0.45);
+    let bucket_floor = material(materials, Color::srgb(0.72, 0.48, 0.05), 0.6);
+    let ball_color = material(materials, Color::srgb(0.79, 0.95, 0.10), 0.35);
     let ball_mesh = meshes.add(Sphere::new(TENNIS_BALL_RADIUS).mesh().ico(3).unwrap());
     assert!(
         ball_positions()
@@ -237,7 +253,7 @@ fn spawn_field(
         Transform::from_xyz(0.0, 0.003, mid_z).with_scale(Vec3::new(width, 0.004, length)),
     ));
 
-    paint_lines(&mut commands, &cube, &line);
+    paint_lines(commands, &cube, &line);
     for wall in pitch_boards() {
         commands.spawn((
             Name::new("NEXT board"),
@@ -478,6 +494,8 @@ mod tests {
             seen_x[usize::from(pose.center_x > 0.0)] = true;
         }
         assert_eq!(seen_x, [true, true]);
+        assert_eq!(PITCH_SOUTH - PITCH_NORTH, 18.0);
+        assert_eq!(PITCH_HALF_WIDTH * 2.0, 12.0);
         for board in pitch_boards() {
             assert!(board.size.min_element() > 0.0);
             assert!(board.center.y > 0.0);

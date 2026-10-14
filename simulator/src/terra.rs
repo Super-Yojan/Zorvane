@@ -18,7 +18,10 @@ impl Plugin for TerraPlugin {
         app.insert_resource(self.config.clone())
             .init_resource::<RoverFleet>()
             .add_systems(PreUpdate, reconcile_fleet)
-            .add_systems(FixedUpdate, keyboard_command)
+            .add_systems(
+                FixedUpdate,
+                keyboard_command.run_if(crate::session::drive_allowed),
+            )
             .add_systems(
                 FixedPostUpdate,
                 drive
@@ -207,8 +210,12 @@ pub(crate) fn reconcile_fleet(
     mut fleet: ResMut<RoverFleet>,
     world: Option<Res<crate::world::WorldConfig>>,
     vehicles: Option<Res<crate::vehicle::Vehicles>>,
+    session: Option<Res<crate::session::SimSession>>,
     rovers: Query<(Entity, &RoverId, &RoverSlot, &Transform), With<Rover>>,
 ) {
+    if session.is_some_and(|session| session.phase == crate::session::Phase::Menu) {
+        return;
+    }
     let mut existing: Vec<_> = rovers.iter().collect();
     existing.sort_by_key(|(_, id, _, _)| id.0);
     if existing.len() > fleet.count() {

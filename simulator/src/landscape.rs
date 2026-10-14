@@ -113,12 +113,14 @@ impl LocalTerrain {
     }
 }
 
-pub(crate) fn install(app: &mut App, config: &WorldConfig) {
+pub(crate) fn install(app: &mut App, config: &WorldConfig, defer_spawn: bool) {
     app.insert_resource(LocalTerrain::new(config.size))
         .init_resource::<Assets<Image>>();
     if config.landscape.enabled {
-        app.init_resource::<Assets<StandardWaterMaterial>>()
-            .add_systems(Startup, generate_landscape);
+        app.init_resource::<Assets<StandardWaterMaterial>>();
+        if !defer_spawn {
+            app.add_systems(Startup, generate_landscape);
+        }
         if app.get_sub_app(RenderApp).is_some() {
             if config.landscape.pond {
                 app.insert_resource(WaterSettings {
@@ -132,11 +134,13 @@ pub(crate) fn install(app: &mut App, config: &WorldConfig) {
                 })
                 .add_plugins(WaterPlugin);
             }
+            #[cfg(feature = "native")]
             if config.landscape.voxel_hills {
                 app.add_plugins(bevy_voxel_world::prelude::VoxelWorldPlugin::with_config(
                     crate::voxel_terrain::TerraVoxelTerrain {
                         size: config.size,
                         seed: config.landscape.seed,
+                        enabled: !defer_spawn,
                     },
                 ));
             }
@@ -245,7 +249,7 @@ fn box_visual(
         .id()
 }
 
-fn generate_landscape(
+pub(crate) fn generate_landscape(
     mut commands: Commands,
     config: Res<WorldConfig>,
     terrain: Res<LocalTerrain>,
@@ -254,6 +258,9 @@ fn generate_landscape(
     mut water_materials: ResMut<Assets<StandardWaterMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    if !config.landscape.enabled {
+        return;
+    }
     let material = |materials: &mut Assets<StandardMaterial>, color| {
         materials.add(StandardMaterial {
             base_color: color,

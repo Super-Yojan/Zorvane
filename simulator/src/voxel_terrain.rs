@@ -7,12 +7,15 @@ use bevy_voxel_world::{custom_meshing::generate_chunk_mesh_for_shape, prelude::*
 pub struct TerraVoxelTerrain {
     pub size: f32,
     pub seed: u64,
+    /// Menu world switches turn hills off without unloading the voxel plugin.
+    pub enabled: bool,
 }
 impl Default for TerraVoxelTerrain {
     fn default() -> Self {
         Self {
             size: 100.0,
             seed: 42,
+            enabled: true,
         }
     }
 }
@@ -27,6 +30,9 @@ pub struct VoxelColliderBundle {
 }
 impl TerraVoxelTerrain {
     pub fn voxel_at(&self, position: IVec3) -> WorldVoxel<u8> {
+        if !self.enabled {
+            return WorldVoxel::Air;
+        }
         let border = position.x.abs().max(position.z.abs()) as f32 / self.size;
         if !(0.43..0.50).contains(&border) || position.y < 0 {
             return WorldVoxel::Air;
@@ -46,6 +52,9 @@ impl VoxelWorldConfig for TerraVoxelTerrain {
     type MaterialIndex = u8;
     type ChunkUserBundle = VoxelColliderBundle;
     fn spawning_distance(&self) -> u32 {
+        if !self.enabled {
+            return 0;
+        }
         (self.size / 64.0).ceil() as u32 + 2
     }
     fn min_despawn_distance(&self) -> u32 {

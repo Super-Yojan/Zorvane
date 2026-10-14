@@ -16,7 +16,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Static wasm sim. Nested under the existing Pages site so this does not
+  # replace the docs deploy. A failed play build still publishes the docs.
+  play:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Trunk
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/trunk.tar.gz \
+            https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz
+          tar -xzf /tmp/trunk.tar.gz -C /tmp
+          sudo install -m 755 /tmp/trunk /usr/local/bin/trunk
+          trunk --version
+
+      - name: Build play site
+        working-directory: simulator
+        run: trunk build --release --public-url /Zorvane/play/
+
+      - name: Upload play dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: zorvane-play
+          path: simulator/dist
+          retention-days: 1
+
   build:
+    needs: [play]
+    if: always() && needs.play.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -60,6 +99,13 @@ jobs:
               '</body>' \
               '</html>' > site/api/index.html
           fi
+
+      - name: Attach play build
+        if: needs.play.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: zorvane-play
+          path: site/play
 
       - name: Upload Pages artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

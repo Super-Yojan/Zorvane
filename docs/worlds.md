@@ -24,6 +24,8 @@
 | 3 | `TERRA_TILES=1` | Elevation around the anchor. A failed load falls back to the town. |
 | 4 | none | Practice town. |
 
+A windowed run starts on a menu that loads one of the three worlds below. `ZORVANE_MENU=0`, headless, and smoke skip that screen and use the switches.
+
 Startup prints `Zorvane vehicle: Terra (terra-ground)`.
 Tiles add a `Terra tiles:` line. NEXT adds a `Terra NEXT:` line.
 

@@ -321,10 +321,13 @@ pub fn build_patch(
 
 pub(crate) fn spawn_patch(
     mut commands: Commands,
-    patch: Res<GeoPatch>,
+    patch: Option<Res<GeoPatch>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    let Some(patch) = patch else {
+        return;
+    };
     let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
     let obstacle_material = materials.add(StandardMaterial {
         base_color: Color::srgb(0.42, 0.38, 0.33),

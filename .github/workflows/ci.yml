@@ -69,3 +69,20 @@ jobs:
           CARGO_BUILD_JOBS: "2"
           RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
         run: cargo test --locked --workspace
+
+  wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Check wasm build
+        env:
+          CARGO_BUILD_JOBS: "2"
+        run: cargo check --locked -p zorvane --target wasm32-unknown-unknown --no-default-features
