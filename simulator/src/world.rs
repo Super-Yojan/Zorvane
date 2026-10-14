@@ -162,9 +162,8 @@ impl WorldConfig {
         self.landscape.enabled = false;
         self.show_grid = false;
         self.size = crate::next_competition::WORLD_SIZE;
-        // A ~0.4 m rover disappears if this frames the whole 105 m pitch.
-        // Stay close and follow the spawn at the centre spot.
-        self.camera_offset = Vec3::new(0.0, 3.0, 4.2);
+        // Behind the south goal, close enough to see the rover between the posts.
+        self.camera_offset = Vec3::new(0.0, 3.2, 5.5);
         self.follow_rover = true;
         self.scene = SceneKind::Next;
     }

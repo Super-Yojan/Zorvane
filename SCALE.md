@@ -46,9 +46,12 @@ Code: `zorvane_vehicle::TerraGround` in `crates/zorvane-vehicle/src/lib.rs`.
 | Board height | **0.28 m** | **unsourced** practice boards in `pitch_boards` |
 | Board thickness | **0.12 m** | **unsourced** |
 | Line width | **0.08 m** | Existing stripe. Law 1 caps line width at 12 cm and does not require 8 cm |
-| NEXT camera | **(0, 3.0, 4.2) m** from the rover | `prepare_next_field`. Close follow so the rover stays visible on the full pitch |
+| Goal width | **7.32 m** | FIFA Law 1 (8 yards). This is the width already implied by the 40.32 m penalty area. `GOAL_WIDTH` |
+| Goal height | **2.44 m** | FIFA Law 1 (8 feet). `GOAL_HEIGHT` |
+| Goal post width | **0.12 m** | Law 1 maximum. The post section is not otherwise specified. `GOAL_POST_WIDTH` |
+| NEXT camera | **(0, 3.2, 5.5) m** from the rover | `prepare_next_field`. Behind the south goal so the rover and the posts stay in frame |
 
-Zatara spawns at the origin, the centre spot, facing −Z (toward the north goal). Terra issue [#21](https://github.com/Super-Yojan/Terra/issues/21), the NEXT Notion hub, and the coaches folder do not publish a field size. [Terra PR #24](https://github.com/Super-Yojan/Terra/pull/24) called an older 18×12 m box a practice approximation. That box is replaced by the decision above.
+Rovers start on the goal lines, just inside the pitch, centred on the goal. Even spawn slots take the south goal and face −Z (into the field). Odd slots take the north goal and face +Z. Extra rovers on a side spread along that goal line, between the posts while they fit and outside the posts after that. Terra issue [#21](https://github.com/Super-Yojan/Terra/issues/21), the NEXT Notion hub, and the coaches folder do not publish a field size. [Terra PR #24](https://github.com/Super-Yojan/Terra/pull/24) called an older 18×12 m box a practice approximation. That box is replaced by the decision above.
 
 ## Tennis balls
 
@@ -60,17 +63,20 @@ Zatara spawns at the origin, the centre spot, facing −Z (toward the north goal
 
 ## Deposit buckets
 
-Both buckets share one shape. Centres are 2.6 m left and right of the pitch centreline, inside the north goal area, mouth 1.55 m inside the north goal line.
+Each bucket is a standard 5-gallon bucket from a user-supplied product diagram. The field model is a slightly tapered open cylinder. The lid is optional and stays off so balls can be dumped in the top.
 
 | Quantity | Value | Source |
 | --- | --- | --- |
-| Interior width | **1.2 m** | **unsourced** `buckets()` in `next_competition.rs` |
-| Interior depth | **0.75 m** | **unsourced** |
-| Wall height | **0.30 m** | **unsourced** |
-| Wall thickness | **0.08 m** | **unsourced** |
-| Count | 2 | practice scene (issue #21 says “bucket(s)”) |
+| Top diameter | 12 in → **0.3048 m** | User-supplied product diagram. `BUCKET_TOP_DIAMETER` |
+| Base diameter | 11.9 in → **0.3023 m** | Same diagram. `BUCKET_BASE_DIAMETER` |
+| Body height | 13.38 in → **0.3399 m** | Same diagram. `BUCKET_BODY_HEIGHT` |
+| Lid height | 1.41 in → **0.0358 m** | Same diagram. Spawned only when a bucket is marked lidded. `BUCKET_LID_HEIGHT` |
+| Total height | **0.3757 m** | Body plus lid. The diagram’s total is about 0.376 m |
+| Wall thickness | **0.0025 m** | **unsourced.** The diagram gives outer diameters. This shell leaves an open interior |
+| Count | **20** (10 on each half) | User decision. `BUCKETS_PER_HALF` |
+| Placement | Seeded, default seed **42** | **Sim choice, not a rule.** `buckets(seed)` / `TERRA_NEXT_SEED`. Centres stay on the pitch, at least 1.6 m inside each goal line, off the halfway line, and clear of the tennis balls |
 
-Nothing in the Terra repo, Terra #21, or the NEXT notes gives a bucket drawing. These stay at the sizes the deposit test already uses.
+The old open-front boxes (1.2 × 0.75 × 0.30 m, two of them in the north goal area) are gone. Nothing in the Terra repo or issue #21 gives a bucket drawing.
 
 ## Practice town
 

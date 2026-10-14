@@ -24,7 +24,7 @@ Buildings, trunks, pond borders, and hills have colliders. Roads sit on the flat
 
 ![NEXT practice pitch](../docs/assets/next.png)
 
-*Same binary. Different world. Six balls, two buckets.*
+*Same binary. Different world. Six balls, twenty open buckets. Rovers start on the goal lines.*
 
 ## Configuration
 

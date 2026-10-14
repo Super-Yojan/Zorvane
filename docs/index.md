@@ -20,7 +20,7 @@ Part of [super-yojan.dev](https://super-yojan.dev). Source: [Super-Yojan/Zorvane
 
 ![NEXT practice pitch](assets/next.png)
 
-*Competition practice. `TERRA_NEXT=1`. Zatara, six balls, two buckets.*
+*Competition pitch. `TERRA_NEXT=1`. Zatara on the south goal line, six balls, twenty buckets.*
 
 | Switch | You get |
 | --- | --- |

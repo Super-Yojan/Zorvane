@@ -88,6 +88,7 @@ GPU tests are `#[ignore]`. They write `/tmp/terra-world-preview.png`.
 | `ZORVANE_MENU` | on for a window | `0` skips the start screen. Headless and smoke already skip it. |
 | `TERRA_HEADLESS` | unset | `1` runs without a window. |
 | `TERRA_NEXT` | off | NEXT pitch. Wins over tiles and mission. |
+| `TERRA_NEXT_SEED` | `42` | Bucket layout seed. Same seed, same twenty places. |
 | `TERRA_TILES` | off | Terrarium elevation patch. |
 | `TERRA_LAT` | `38.8297` | Tile anchor, degrees. |
 | `TERRA_LON` | `-77.3075` | Tile anchor. Johnson Center. |

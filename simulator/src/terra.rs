@@ -226,15 +226,31 @@ pub(crate) fn reconcile_fleet(
     }
     let mut occupied: std::collections::BTreeSet<_> =
         existing.iter().map(|(_, _, slot, _)| slot.0).collect();
-    let spacing = physics.chassis_size.x.max(physics.chassis_size.z) + 0.6;
+    let next_field = world
+        .as_ref()
+        .is_some_and(|world| world.scene == crate::world::SceneKind::Next);
+    let fleet_count = fleet.count();
+    let spacing = if next_field {
+        physics.chassis_size.x + 0.2
+    } else {
+        physics.chassis_size.x.max(physics.chassis_size.z) + 0.6
+    };
     let max_distance = world.as_ref().map_or(100.0, |world| world.size) * 0.38;
-    let available_slots = 1 + 4 * (max_distance / spacing).floor() as usize;
+    let available_slots = if next_field {
+        fleet_count.max(1)
+    } else {
+        1 + 4 * (max_distance / spacing).floor() as usize
+    };
     let mut positions: Vec<_> = existing
         .iter()
         .map(|(_, _, _, pose)| pose.translation.with_y(0.0))
         .collect();
     let offset_for = |slot: usize| {
-        if slot == 0 {
+        if next_field {
+            crate::next_competition::rover_spawn(slot, fleet_count, physics.chassis_size)
+                .0
+                .with_y(0.0)
+        } else if slot == 0 {
             Vec3::ZERO
         } else {
             let distance = ((slot - 1) / 4 + 1) as f32 * spacing;
@@ -277,7 +293,12 @@ pub(crate) fn reconcile_fleet(
             WheelSpeeds::default(),
             Odometry::default(),
             RoverBody::new(&physics),
-            Transform::from_translation(offset + Vec3::Y * (physics.chassis_size.y / 2.0 + 0.02)),
+            Transform::from_translation(offset + Vec3::Y * (physics.chassis_size.y / 2.0 + 0.02))
+                .with_rotation(if next_field {
+                    crate::next_competition::rover_spawn(slot, fleet_count, physics.chassis_size).1
+                } else {
+                    Quat::IDENTITY
+                }),
         ));
         if slot == 0 {
             rover.insert(KeyboardControlled);

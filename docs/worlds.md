@@ -15,7 +15,7 @@
 
 ![NEXT pitch](assets/next.png)
 
-*105 m by 68 m pitch on a 120 m square. Zatara starts at the centre spot.*
+*105 m by 68 m pitch. Zatara starts on the south goal line. Twenty open buckets.*
 
 | Order | Switch | Layout |
 | --- | --- | --- |
@@ -60,8 +60,8 @@ TERRA_NEXT=1 cargo run -p zorvane
 
 Zatara is spawn slot 0 of `terra-ground`. Same chassis. New name.
 
-Push a ball into a bucket. Past the mouth, a pull holds it against the back wall.
-The opening is wider than the rover. The scene does not keep score.
+Drop a ball into an open bucket. Once it is through the rim, a pull holds it in the middle.
+The scene does not keep score. Rovers line up on the goal lines, split by end.
 
 Field notes: [NEXT field](reference/next.md).
 

@@ -1,10 +1,10 @@
 //! NEXT competition field for Zatara.
 //!
 //! A full soccer pitch at the FIFA Laws of the Game recommended international
-//! size, with tennis balls and open-front deposit buckets. The primary rover
+//! size, with tennis balls and open-top deposit buckets. The primary rover
 //! is named Zatara. It is spawn slot 0 of the active body, which defaults to
 //! `terra-ground` (Terra's chassis and differential drive). Zatara is not a
-//! separate vehicle type.
+//! separate vehicle type. Rovers line up on the goal lines, facing into the field.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -28,10 +28,16 @@ pub const GOAL_AREA_WIDTH: f32 = 18.32;
 pub const WORLD_SIZE: f32 = 120.0;
 /// Pitch half-width along Bevy X, metres.
 pub const PITCH_HALF_WIDTH: f32 = PITCH_WIDTH * 0.5;
-/// South goal line. The pitch is centred on the origin. Zatara spawns there, facing −Z.
+/// South goal line. The pitch is centred on the origin.
 pub const PITCH_SOUTH: f32 = PITCH_LENGTH * 0.5;
-/// North goal line. Deposit buckets sit inside this end.
+/// North goal line.
 pub const PITCH_NORTH: f32 = -PITCH_LENGTH * 0.5;
+/// FIFA Law 1 goal width, metres (8 yards). Implied by the 40.32 m penalty area.
+pub const GOAL_WIDTH: f32 = 7.32;
+/// FIFA Law 1 goal height, metres (8 feet).
+pub const GOAL_HEIGHT: f32 = 2.44;
+/// Post and crossbar width. Law 1 allows at most 12 cm; the section is otherwise unspecified.
+pub const GOAL_POST_WIDTH: f32 = 0.12;
 const BOARD_HEIGHT: f32 = 0.28;
 const BOARD_THICKNESS: f32 = 0.12;
 const LINE_WIDTH: f32 = 0.08;
@@ -40,6 +46,20 @@ const MARKING_Y: f32 = 0.008;
 /// Regulation tennis ball, metres and kilograms.
 pub const TENNIS_BALL_RADIUS: f32 = 0.0335;
 pub const TENNIS_BALL_MASS: f32 = 0.058;
+
+/// 5-gallon bucket, from the user-supplied product diagram (inches × 0.0254).
+pub const BUCKET_TOP_DIAMETER: f32 = 0.3048;
+pub const BUCKET_BASE_DIAMETER: f32 = 0.3023;
+pub const BUCKET_BODY_HEIGHT: f32 = 0.3399;
+pub const BUCKET_LID_HEIGHT: f32 = 0.0358;
+/// Body plus lid. The field leaves lids off so the top stays open.
+pub const BUCKET_TOTAL_HEIGHT: f32 = BUCKET_BODY_HEIGHT + BUCKET_LID_HEIGHT;
+/// Shell thickness so the open top has an interior. Not on the product diagram.
+const BUCKET_WALL: f32 = 0.0025;
+pub const BUCKETS_PER_HALF: usize = 10;
+/// How far inside each goal line a bucket centre must stay. Sim choice.
+pub const SPAWN_CLEARANCE: f32 = 1.6;
+pub const DEFAULT_BUCKET_SEED: u64 = 42;
 
 pub fn enabled() -> bool {
     matches!(
@@ -65,110 +85,164 @@ pub fn on_pitch(x: f32, z: f32, margin: f32) -> bool {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct BucketPose {
-    pub center_x: f32,
-    pub mouth_z: f32,
-    pub interior_width: f32,
-    pub interior_depth: f32,
-    pub wall_height: f32,
-    pub wall_thickness: f32,
-}
-
-#[derive(Clone, Copy, Debug)]
 pub struct Wall {
     pub center: Vec3,
     pub size: Vec3,
 }
 
-impl BucketPose {
-    pub fn bucket(self) -> Bucket {
-        let half_w = self.interior_width * 0.5;
-        Bucket {
-            interior_min: Vec3::new(
-                self.center_x - half_w,
-                0.0,
-                self.mouth_z - self.interior_depth,
-            ),
-            interior_max: Vec3::new(self.center_x + half_w, self.wall_height, self.mouth_z),
-            rest: Vec3::new(
-                self.center_x,
-                TENNIS_BALL_RADIUS,
-                self.mouth_z - self.interior_depth + TENNIS_BALL_RADIUS + 0.05,
-            ),
-        }
+/// One bucket on the pitch. `lid` is off for the field layout.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BucketPlace {
+    pub x: f32,
+    pub z: f32,
+    pub lid: bool,
+}
+
+impl BucketPlace {
+    pub fn open(x: f32, z: f32) -> Self {
+        Self { x, z, lid: false }
     }
 
-    /// Back wall and two side walls. The south face is open so a ball can be pushed in.
-    pub fn walls(self) -> [Wall; 3] {
-        let half_w = self.interior_width * 0.5;
-        let back_z = self.mouth_z - self.interior_depth - self.wall_thickness * 0.5;
-        let side_z = self.mouth_z - self.interior_depth * 0.5;
-        let y = self.wall_height * 0.5;
-        [
-            Wall {
-                center: Vec3::new(self.center_x, y, back_z),
-                size: Vec3::new(
-                    self.interior_width + self.wall_thickness * 2.0,
-                    self.wall_height,
-                    self.wall_thickness,
-                ),
-            },
-            Wall {
-                center: Vec3::new(
-                    self.center_x - half_w - self.wall_thickness * 0.5,
-                    y,
-                    side_z,
-                ),
-                size: Vec3::new(self.wall_thickness, self.wall_height, self.interior_depth),
-            },
-            Wall {
-                center: Vec3::new(
-                    self.center_x + half_w + self.wall_thickness * 0.5,
-                    y,
-                    side_z,
-                ),
-                size: Vec3::new(self.wall_thickness, self.wall_height, self.interior_depth),
-            },
-        ]
+    pub fn with_lid(mut self) -> Self {
+        self.lid = true;
+        self
+    }
+
+    pub fn volume(self) -> Bucket {
+        let inner = BUCKET_TOP_DIAMETER * 0.5 - BUCKET_WALL;
+        Bucket {
+            center_x: self.x,
+            center_z: self.z,
+            inner_radius: inner,
+            floor_y: BUCKET_WALL,
+            rim_y: BUCKET_BODY_HEIGHT,
+            rest: Vec3::new(self.x, BUCKET_WALL + TENNIS_BALL_RADIUS, self.z),
+        }
     }
 }
 
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Bucket {
-    pub interior_min: Vec3,
-    pub interior_max: Vec3,
+    pub center_x: f32,
+    pub center_z: f32,
+    pub inner_radius: f32,
+    pub floor_y: f32,
+    pub rim_y: f32,
     pub rest: Vec3,
 }
 
 impl Bucket {
+    /// Open top: a ball is inside once it has dropped through the rim.
     pub fn contains(self, point: Vec3) -> bool {
-        point.x >= self.interior_min.x
-            && point.x <= self.interior_max.x
-            && point.z >= self.interior_min.z
-            && point.z <= self.interior_max.z
-            && point.y <= self.interior_max.y + 0.05
+        let dx = point.x - self.center_x;
+        let dz = point.z - self.center_z;
+        dx * dx + dz * dz <= self.inner_radius * self.inner_radius
+            && point.y <= self.rim_y + 0.02
+            && point.y >= self.floor_y - 0.05
     }
 }
 
-pub fn buckets() -> [BucketPose; 2] {
-    let pose = BucketPose {
-        center_x: 0.0,
-        mouth_z: PITCH_NORTH + 1.55,
-        interior_width: 1.2,
-        interior_depth: 0.75,
-        wall_height: 0.30,
-        wall_thickness: 0.08,
+pub fn bucket_seed() -> u64 {
+    std::env::var("TERRA_NEXT_SEED")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_BUCKET_SEED)
+}
+
+/// Ten buckets on each half. Same seed, same places. Not a competition rule.
+pub fn buckets(seed: u64) -> Vec<BucketPlace> {
+    let mut rng = fastrand::Rng::with_seed(seed);
+    let mut places = place_half(&mut rng, true);
+    places.extend(place_half(&mut rng, false));
+    places
+}
+
+fn place_half(rng: &mut fastrand::Rng, south: bool) -> Vec<BucketPlace> {
+    let margin = BUCKET_TOP_DIAMETER * 0.5 + 0.2;
+    let x_min = -PITCH_HALF_WIDTH + margin;
+    let x_max = PITCH_HALF_WIDTH - margin;
+    let (z_min, z_max) = if south {
+        (0.8, PITCH_SOUTH - SPAWN_CLEARANCE - margin)
+    } else {
+        (PITCH_NORTH + SPAWN_CLEARANCE + margin, -0.8)
     };
-    [
-        BucketPose {
-            center_x: -2.6,
-            ..pose
-        },
-        BucketPose {
-            center_x: 2.6,
-            ..pose
-        },
-    ]
+    let min_sep = 1.5_f32;
+    let balls: Vec<Vec2> = ball_positions()
+        .into_iter()
+        .map(|ball| Vec2::new(ball.x, ball.z))
+        .collect();
+    let mut points = Vec::with_capacity(BUCKETS_PER_HALF);
+    for _ in 0..8_000 {
+        if points.len() == BUCKETS_PER_HALF {
+            break;
+        }
+        let point = Vec2::new(
+            x_min + rng.f32() * (x_max - x_min),
+            z_min + rng.f32() * (z_max - z_min),
+        );
+        let clear = points
+            .iter()
+            .all(|other: &Vec2| other.distance(point) >= min_sep)
+            && balls.iter().all(|ball| ball.distance(point) >= 0.8);
+        if clear {
+            points.push(point);
+        }
+    }
+    assert_eq!(
+        points.len(),
+        BUCKETS_PER_HALF,
+        "bucket layout could not place {BUCKETS_PER_HALF} buckets"
+    );
+    points.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    points
+        .into_iter()
+        .map(|point| BucketPlace::open(point.x, point.y))
+        .collect()
+}
+
+/// Goal-line spawn. Even slots take the south goal, odd slots the north goal.
+/// Forward is local −Z, so the south side uses identity and the north side yaws 180°.
+pub fn rover_spawn(slot: usize, count: usize, chassis: Vec3) -> (Vec3, Quat) {
+    let south = slot % 2 == 0;
+    let index = slot / 2;
+    let on_side = if south { count.div_ceil(2) } else { count / 2 };
+    let spacing = chassis.x + 0.25;
+    let xs = goal_line_xs(on_side.max(1), spacing, chassis.x);
+    let x = xs[index.min(xs.len() - 1)];
+    let inset = chassis.z * 0.5 + 0.05;
+    let z = if south {
+        PITCH_SOUTH - inset
+    } else {
+        PITCH_NORTH + inset
+    };
+    let yaw = if south {
+        Quat::IDENTITY
+    } else {
+        Quat::from_rotation_y(std::f32::consts::PI)
+    };
+    (Vec3::new(x, chassis.y * 0.5 + 0.02, z), yaw)
+}
+
+fn goal_line_xs(count: usize, spacing: f32, chassis_x: f32) -> Vec<f32> {
+    let inner = GOAL_WIDTH * 0.5 - GOAL_POST_WIDTH - chassis_x * 0.5 - 0.08;
+    let mouth = ((inner * 2.0 / spacing).floor() as usize)
+        .saturating_add(1)
+        .max(1);
+    let in_mouth = count.min(mouth);
+    let span = (in_mouth - 1) as f32 * spacing;
+    let mut xs: Vec<f32> = (0..in_mouth)
+        .map(|index| -span * 0.5 + index as f32 * spacing)
+        .collect();
+    let mut wing = 0usize;
+    while xs.len() < count {
+        let side = if wing % 2 == 0 { -1.0 } else { 1.0 };
+        let step = (wing / 2) as f32;
+        xs.push(
+            side * (GOAL_WIDTH * 0.5 + GOAL_POST_WIDTH + chassis_x * 0.5 + 0.15 + step * spacing),
+        );
+        wing += 1;
+    }
+    xs
 }
 
 pub fn ball_positions() -> [Vec3; 6] {
@@ -183,21 +257,15 @@ pub fn ball_positions() -> [Vec3; 6] {
     ]
 }
 
-pub fn pitch_boards() -> [Wall; 4] {
+pub fn pitch_boards() -> Vec<Wall> {
     let y = BOARD_HEIGHT * 0.5;
     let length = PITCH_SOUTH - PITCH_NORTH;
     let width = PITCH_HALF_WIDTH * 2.0;
     let mid_z = (PITCH_SOUTH + PITCH_NORTH) * 0.5;
     let t = BOARD_THICKNESS;
-    [
-        Wall {
-            center: Vec3::new(0.0, y, PITCH_SOUTH + t * 0.5),
-            size: Vec3::new(width + t * 2.0, BOARD_HEIGHT, t),
-        },
-        Wall {
-            center: Vec3::new(0.0, y, PITCH_NORTH - t * 0.5),
-            size: Vec3::new(width + t * 2.0, BOARD_HEIGHT, t),
-        },
+    let opening = GOAL_WIDTH + GOAL_POST_WIDTH;
+    let side = (width - opening) * 0.5;
+    let mut walls = vec![
         Wall {
             center: Vec3::new(-PITCH_HALF_WIDTH - t * 0.5, y, mid_z),
             size: Vec3::new(t, BOARD_HEIGHT, length),
@@ -206,7 +274,21 @@ pub fn pitch_boards() -> [Wall; 4] {
             center: Vec3::new(PITCH_HALF_WIDTH + t * 0.5, y, mid_z),
             size: Vec3::new(t, BOARD_HEIGHT, length),
         },
-    ]
+    ];
+    for goal_z in [PITCH_SOUTH, PITCH_NORTH] {
+        let z = if goal_z > 0.0 {
+            goal_z + t * 0.5
+        } else {
+            goal_z - t * 0.5
+        };
+        for side_sign in [-1.0_f32, 1.0] {
+            walls.push(Wall {
+                center: Vec3::new(side_sign * (opening * 0.5 + side * 0.5), y, z),
+                size: Vec3::new(side, BOARD_HEIGHT, t),
+            });
+        }
+    }
+    walls
 }
 
 #[derive(Component)]
@@ -247,8 +329,9 @@ fn spawn_field_contents(
     let grass = material(materials, Color::srgb(0.18, 0.52, 0.22), 0.95);
     let line = material(materials, Color::srgb(0.95, 0.95, 0.92), 0.7);
     let board = material(materials, Color::srgb(0.90, 0.92, 0.94), 0.55);
-    let bucket_color = material(materials, Color::srgb(0.93, 0.68, 0.08), 0.45);
-    let bucket_floor = material(materials, Color::srgb(0.72, 0.48, 0.05), 0.6);
+    let bucket_color = material(materials, Color::srgb(0.93, 0.94, 0.95), 0.45);
+    let lid_color = material(materials, Color::srgb(0.75, 0.78, 0.80), 0.5);
+    let goal_color = material(materials, Color::srgb(0.95, 0.95, 0.96), 0.4);
     let ball_color = material(materials, Color::srgb(0.79, 0.95, 0.10), 0.35);
     let ball_mesh = meshes.add(Sphere::new(TENNIS_BALL_RADIUS).mesh().ico(3).unwrap());
     assert!(
@@ -284,32 +367,36 @@ fn spawn_field_contents(
             Transform::from_translation(wall.center).with_scale(wall.size),
         ));
     }
-    for (index, pose) in buckets().into_iter().enumerate() {
-        let bucket = pose.bucket();
+    spawn_goals(commands, meshes, &goal_color);
+    let shell = meshes.add(bucket_shell_mesh());
+    let lid_mesh = meshes.add(Cylinder::new(BUCKET_TOP_DIAMETER * 0.5, BUCKET_LID_HEIGHT));
+    for (index, place) in buckets(bucket_seed()).into_iter().enumerate() {
+        let bucket = place.volume();
         commands.spawn((
             Name::new(format!("NEXT bucket {}", index + 1)),
             NextField,
             bucket,
-            Mesh3d(cube.clone()),
-            MeshMaterial3d(bucket_floor.clone()),
-            Transform::from_xyz(
-                pose.center_x,
-                0.005,
-                pose.mouth_z - pose.interior_depth * 0.5,
-            )
-            .with_scale(Vec3::new(pose.interior_width, 0.006, pose.interior_depth)),
+            RigidBody::Static,
+            bucket_collider(),
+            Friction::new(0.7),
+            Restitution::new(0.05),
+            Mesh3d(shell.clone()),
+            MeshMaterial3d(bucket_color.clone()),
+            Transform::from_xyz(place.x, 0.0, place.z),
         ));
-        for wall in pose.walls() {
+        if place.lid {
             commands.spawn((
-                Name::new("NEXT bucket wall"),
+                Name::new("NEXT bucket lid"),
                 NextField,
                 RigidBody::Static,
-                Collider::cuboid(1.0, 1.0, 1.0),
-                Friction::new(0.7),
-                Restitution::new(0.05),
-                Mesh3d(cube.clone()),
-                MeshMaterial3d(bucket_color.clone()),
-                Transform::from_translation(wall.center).with_scale(wall.size),
+                Collider::cylinder(BUCKET_TOP_DIAMETER * 0.5, BUCKET_LID_HEIGHT),
+                Mesh3d(lid_mesh.clone()),
+                MeshMaterial3d(lid_color.clone()),
+                Transform::from_xyz(
+                    place.x,
+                    BUCKET_BODY_HEIGHT + BUCKET_LID_HEIGHT * 0.5,
+                    place.z,
+                ),
             ));
         }
     }
@@ -334,8 +421,116 @@ fn spawn_field_contents(
     eprintln!(
         "Terra NEXT: Zatara on a {PITCH_LENGTH} m by {PITCH_WIDTH} m pitch, {} tennis balls, {} deposit buckets. W/A/S/D drives the primary rover when Zenoh is off.",
         ball_positions().len(),
-        buckets().len()
+        buckets(bucket_seed()).len()
     );
+}
+
+fn spawn_goals(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    material: &Handle<StandardMaterial>,
+) {
+    let post = meshes.add(Cylinder::new(GOAL_POST_WIDTH * 0.5, GOAL_HEIGHT));
+    let bar = meshes.add(Cylinder::new(GOAL_POST_WIDTH * 0.5, GOAL_WIDTH));
+    for goal_z in [PITCH_SOUTH, PITCH_NORTH] {
+        for side in [-1.0_f32, 1.0] {
+            commands.spawn((
+                Name::new("NEXT goal post"),
+                NextField,
+                RigidBody::Static,
+                Collider::cylinder(GOAL_POST_WIDTH * 0.5, GOAL_HEIGHT),
+                Mesh3d(post.clone()),
+                MeshMaterial3d(material.clone()),
+                Transform::from_xyz(side * GOAL_WIDTH * 0.5, GOAL_HEIGHT * 0.5, goal_z),
+            ));
+        }
+        commands.spawn((
+            Name::new("NEXT crossbar"),
+            NextField,
+            RigidBody::Static,
+            Collider::cylinder(GOAL_POST_WIDTH * 0.5, GOAL_WIDTH),
+            Mesh3d(bar.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_xyz(0.0, GOAL_HEIGHT, goal_z)
+                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+        ));
+    }
+}
+
+fn bucket_shell_mesh() -> Mesh {
+    let bottom = BUCKET_BASE_DIAMETER * 0.5;
+    let top = BUCKET_TOP_DIAMETER * 0.5;
+    let height = BUCKET_BODY_HEIGHT;
+    let segments = 28u32;
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut indices = Vec::new();
+    let ring = |radius: f32, y: f32, index: u32| -> Vec3 {
+        let angle = index as f32 / segments as f32 * std::f32::consts::TAU;
+        Vec3::new(angle.cos() * radius, y, angle.sin() * radius)
+    };
+    let mut quad = |a: Vec3, b: Vec3, c: Vec3, d: Vec3| {
+        let start = positions.len() as u32;
+        let normal = (b - a).cross(c - a).normalize_or_zero();
+        for point in [a, b, c, d] {
+            positions.push(point.to_array());
+            normals.push(normal.to_array());
+        }
+        indices.extend([start, start + 1, start + 2, start, start + 2, start + 3]);
+    };
+    for index in 0..segments {
+        let next = index + 1;
+        let outer_bottom = ring(bottom, 0.0, index);
+        let outer_bottom_next = ring(bottom, 0.0, next);
+        let outer_top = ring(top, height, index);
+        let outer_top_next = ring(top, height, next);
+        quad(outer_bottom, outer_bottom_next, outer_top_next, outer_top);
+        let inner_bottom = ring((bottom - BUCKET_WALL).max(0.02), BUCKET_WALL, index);
+        let inner_bottom_next = ring((bottom - BUCKET_WALL).max(0.02), BUCKET_WALL, next);
+        let inner_top = ring((top - BUCKET_WALL).max(0.02), height, index);
+        let inner_top_next = ring((top - BUCKET_WALL).max(0.02), height, next);
+        quad(inner_top, inner_top_next, inner_bottom_next, inner_bottom);
+        quad(
+            inner_bottom,
+            inner_bottom_next,
+            outer_bottom_next,
+            outer_bottom,
+        );
+    }
+    let mut mesh = Mesh::new(
+        bevy::render::render_resource::PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_indices(bevy::mesh::Indices::U32(indices));
+    mesh
+}
+
+fn bucket_collider() -> Collider {
+    let bottom = BUCKET_BASE_DIAMETER * 0.5 - BUCKET_WALL * 0.5;
+    let top = BUCKET_TOP_DIAMETER * 0.5 - BUCKET_WALL * 0.5;
+    let wall_r = (bottom + top) * 0.5;
+    let segments = 16;
+    let arc = std::f32::consts::TAU * wall_r / segments as f32;
+    let mut shapes = vec![(
+        Position::from_xyz(0.0, BUCKET_WALL * 0.5, 0.0),
+        Rotation::default(),
+        Collider::cylinder((bottom - BUCKET_WALL).max(0.02), BUCKET_WALL),
+    )];
+    for index in 0..segments {
+        let angle = index as f32 / segments as f32 * std::f32::consts::TAU;
+        shapes.push((
+            Position::from_xyz(
+                angle.cos() * wall_r,
+                BUCKET_BODY_HEIGHT * 0.5,
+                angle.sin() * wall_r,
+            ),
+            Rotation::from(Quat::from_rotation_y(-angle)),
+            Collider::cuboid(BUCKET_WALL * 2.0, BUCKET_BODY_HEIGHT, arc * 1.15),
+        ));
+    }
+    Collider::compound(shapes)
 }
 
 fn paint_lines(commands: &mut Commands, cube: &Handle<Mesh>, line: &Handle<StandardMaterial>) {
@@ -462,16 +657,12 @@ fn settle_deposits(
             if !bucket.contains(position.0) {
                 continue;
             }
-            let to_rest = bucket.rest - position.0;
-            let pull = Vec3::new(to_rest.x, 0.0, to_rest.z).clamp_length_max(0.4) * 12.0;
+            let to_rest = Vec3::new(bucket.rest.x - position.x, 0.0, bucket.rest.z - position.z);
+            let pull = to_rest.clamp_length_max(0.25) * 8.0;
             velocity.x += pull.x * dt;
             velocity.z += pull.z * dt;
             velocity.x *= damp;
             velocity.z *= damp;
-            // Mouths open toward +Z. Shed speed that would roll the ball back out.
-            if velocity.z > 0.0 {
-                velocity.z *= damp;
-            }
         }
     }
 }
@@ -518,32 +709,53 @@ mod tests {
         assert!(GOAL_AREA_WIDTH < PENALTY_AREA_WIDTH);
         assert!(PENALTY_AREA_WIDTH < PITCH_WIDTH);
         assert!(PENALTY_AREA_DEPTH * 2.0 < PITCH_LENGTH);
-        let mut seen_x = [false; 2];
-        for pose in buckets() {
-            let bucket = pose.bucket();
-            assert!(bucket.interior_max.z > bucket.interior_min.z);
-            assert!(on_pitch(pose.center_x, pose.mouth_z, 0.3));
-            assert!(on_pitch(pose.center_x, bucket.interior_min.z, 0.05));
+        assert!((BUCKET_TOTAL_HEIGHT - 0.376).abs() < 0.001);
+        assert_eq!(BUCKET_TOP_DIAMETER, 0.3048);
+        assert_eq!(BUCKET_BASE_DIAMETER, 0.3023);
+        assert!(BUCKET_TOP_DIAMETER > BUCKET_BASE_DIAMETER);
+        let open = BucketPlace::open(0.0, 0.0);
+        assert!(!open.lid);
+        assert!(open.with_lid().lid);
+        let placed = buckets(DEFAULT_BUCKET_SEED);
+        assert_eq!(placed.len(), BUCKETS_PER_HALF * 2);
+        assert_eq!(buckets(DEFAULT_BUCKET_SEED), placed);
+        assert_ne!(buckets(DEFAULT_BUCKET_SEED + 1), placed);
+        let mut halves = [0usize, 0];
+        for place in &placed {
+            assert!(!place.lid);
+            let bucket = place.volume();
+            assert!(bucket.contains(bucket.rest), "{place:?}");
+            assert!(on_pitch(place.x, place.z, BUCKET_TOP_DIAMETER * 0.5));
             assert!(
-                pose.interior_width > 1.0,
-                "Zatara must be able to nose into the bin"
+                place.z < PITCH_SOUTH - SPAWN_CLEARANCE && place.z > PITCH_NORTH + SPAWN_CLEARANCE,
+                "bucket overlaps a goal-line spawn: {place:?}"
             );
-            let [back, left, right] = pose.walls();
-            let back_inner_z = back.center.z + back.size.z * 0.5;
-            assert!((back_inner_z - bucket.interior_min.z).abs() < 1e-4);
-            assert!((left.center.x + left.size.x * 0.5 - bucket.interior_min.x).abs() < 1e-4);
-            assert!((right.center.x - right.size.x * 0.5 - bucket.interior_max.x).abs() < 1e-4);
-            assert!(bucket.contains(bucket.rest));
-            let goal_half = GOAL_AREA_WIDTH * 0.5;
-            assert!(
-                pose.center_x.abs() + pose.interior_width * 0.5 < goal_half,
-                "bucket must sit inside the north goal area"
-            );
-            assert!(pose.mouth_z > PITCH_NORTH && pose.mouth_z < PITCH_NORTH + GOAL_AREA_DEPTH);
-            assert!(bucket.interior_min.z > PITCH_NORTH);
-            seen_x[usize::from(pose.center_x > 0.0)] = true;
+            assert!(place.z.abs() > 0.5, "bucket sits on the halfway line");
+            halves[usize::from(place.z > 0.0)] += 1;
+            for ball in &ball_positions() {
+                assert!(Vec2::new(place.x, place.z).distance(Vec2::new(ball.x, ball.z)) > 0.7);
+            }
         }
-        assert_eq!(seen_x, [true, true]);
+        assert_eq!(halves, [BUCKETS_PER_HALF, BUCKETS_PER_HALF]);
+        for pair in placed.windows(2) {
+            let apart = Vec2::new(pair[0].x, pair[0].z).distance(Vec2::new(pair[1].x, pair[1].z));
+            if (pair[0].z > 0.0) == (pair[1].z > 0.0) {
+                assert!(apart > 1.4, "{pair:?} {apart}");
+            }
+        }
+        let chassis = Vec3::new(0.403, 0.144, 0.384);
+        let (south, south_yaw) = rover_spawn(0, 1, chassis);
+        assert!(south.x.abs() < 0.05);
+        assert!((south.z - (PITCH_SOUTH - chassis.z * 0.5 - 0.05)).abs() < 1e-3);
+        assert_eq!(south_yaw, Quat::IDENTITY);
+        let (north, north_yaw) = rover_spawn(1, 2, chassis);
+        assert!(north.x.abs() < 0.05);
+        assert!(north.z < PITCH_NORTH + 0.4);
+        assert!((north_yaw * Vec3::NEG_Z).z > 0.99);
+        let (left, _) = rover_spawn(0, 4, chassis);
+        let (right, _) = rover_spawn(2, 4, chassis);
+        assert!((left.x - right.x).abs() > 0.4);
+        assert!(left.z > 0.0 && right.z > 0.0);
         assert_eq!(PITCH_SOUTH - PITCH_NORTH, PITCH_LENGTH);
         assert_eq!(PITCH_HALF_WIDTH * 2.0, PITCH_WIDTH);
         for board in pitch_boards() {
@@ -590,14 +802,23 @@ mod tests {
             world.query::<&TennisBall>().iter(world).count(),
             ball_positions().len()
         );
-        assert_eq!(world.query::<&Bucket>().iter(world).count(), 2);
-        assert_eq!(world.query::<&PitchBoard>().iter(world).count(), 4);
-        let zatara = world
+        assert_eq!(
+            world.query::<&Bucket>().iter(world).count(),
+            buckets(bucket_seed()).len()
+        );
+        assert_eq!(
+            world.query::<&PitchBoard>().iter(world).count(),
+            pitch_boards().len()
+        );
+        let chassis_now = world.resource::<RoverPhysicsConfig>().chassis_size;
+        let zatara = *world
             .query_filtered::<&Transform, With<Zatara>>()
             .single(world)
             .expect("primary rover");
-        assert!(zatara.translation.x.abs() < 0.05);
-        assert!(on_pitch(zatara.translation.x, zatara.translation.z, 0.5));
+        let (expected, _) = rover_spawn(0, 1, chassis_now);
+        assert!((zatara.translation.x - expected.x).abs() < 0.05);
+        assert!((zatara.translation.z - expected.z).abs() < 0.05);
+        assert!((zatara.rotation * Vec3::NEG_Z).z < -0.99);
         let ground = zorvane_vehicle::TerraGround;
         let chassis = ground.chassis();
         let physics = world.resource::<RoverPhysicsConfig>();
@@ -764,24 +985,17 @@ mod tests {
 
     #[test]
     fn bucket_keeps_a_deposited_ball() {
-        let pose = buckets()[0];
-        let bucket = pose.bucket();
+        let place = BucketPlace::open(0.0, 0.0);
+        let bucket = place.volume();
         let mut app = physics_app();
-        app.world_mut().spawn(bucket);
-        for wall in pose.walls() {
-            app.world_mut().spawn((
-                RigidBody::Static,
-                Collider::cuboid(wall.size.x, wall.size.y, wall.size.z),
-                Friction::new(0.7),
-                Restitution::ZERO,
-                Transform::from_translation(wall.center),
-            ));
-        }
-        let start = Vec3::new(
-            pose.center_x,
-            TENNIS_BALL_RADIUS + 0.02,
-            bucket.rest.z + 0.28,
-        );
+        app.world_mut().spawn((
+            bucket,
+            RigidBody::Static,
+            bucket_collider(),
+            Friction::new(0.7),
+            Restitution::new(0.05),
+        ));
+        let start = Vec3::new(bucket.inner_radius * 0.45, bucket.rest.y + 0.05, 0.0);
         assert!(bucket.contains(start), "{start:?} vs {bucket:?}");
         let ball = app
             .world_mut()
@@ -794,20 +1008,21 @@ mod tests {
                 Restitution::new(0.2),
                 LinearDamping(0.2),
                 SweptCcd::default(),
-                LinearVelocity(Vec3::new(0.0, 0.0, 1.6)),
+                LinearVelocity(Vec3::new(0.4, 0.0, 0.0)),
                 Transform::from_translation(start),
             ))
             .id();
-        tick(&mut app, 150);
+        tick(&mut app, 180);
         let position = app.world().get::<Position>(ball).unwrap().0;
         assert!(
             bucket.contains(position),
             "ball left the bucket: {position:?}"
         );
+        let started = Vec2::new(start.x, start.z).length();
+        let ended = Vec2::new(position.x, position.z).length();
         assert!(
-            position.z < start.z - 0.05,
-            "ball was not drawn toward the back of the bucket: start {start:?} now {position:?}"
+            ended < started,
+            "ball was not drawn toward the middle: start {start:?} now {position:?}"
         );
-        assert!(position.z > bucket.interior_min.z);
     }
 }
