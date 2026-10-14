@@ -8,15 +8,24 @@
 //! mounted: its tiles are tens of kilometres, displacement is GPU-only, and a
 //! streaming camera would fight the rover overview camera.
 
+#[cfg(not(feature = "native"))]
+use crate::web_tiles::{
+    HeightGrid, HeightGrids, MIN_ZOOM, TerrainAnchor, TileKey, WorldConfig as TileTopology,
+    ground_height,
+};
 use avian3d::prelude::*;
 use bevy::prelude::*;
+#[cfg(feature = "native")]
 use bevytiles::{
     config::{MIN_ZOOM, NetworkConfig, TerrainAnchor, WorldConfig as TileTopology},
     height::{HeightGrids, ground_height},
     lod::TileKey,
     source::{TileDrop, TileRequest, TileSource},
 };
-use std::path::{Path, PathBuf};
+#[cfg(feature = "native")]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(feature = "native")]
 use std::time::{Duration, Instant};
 
 /// Matches the circumference bevytiles uses for `WorldConfig::from_lat_lon`.
@@ -29,6 +38,7 @@ const CLEARANCE_M: f32 = 3.0;
 const BUNDLE_ZOOM: u8 = 15;
 const BUNDLE_X: i32 = 9347;
 const BUNDLE_Z: i32 = 12543;
+#[cfg(feature = "native")]
 const BUNDLE_PNG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/geo/terrarium.png");
 
 /// George W. Johnson Center, George Mason University Fairfax campus.
@@ -209,9 +219,15 @@ pub fn load_patch(config: &GeoTileConfig, extent: f32) -> Result<GeoPatch, Strin
                 .into(),
         );
     }
-    seed_bundle(&config.cache_dir, &tiles)?;
+    let grids = fill_grids(config, &tiles)?;
+    build_patch(&grids, &anchor, extent, config.slope_limit)
+}
+
+#[cfg(feature = "native")]
+fn fill_grids(config: &GeoTileConfig, tiles: &[TileRef]) -> Result<HeightGrids, String> {
+    seed_bundle(&config.cache_dir, tiles)?;
     if !config.fetch {
-        for tile in &tiles {
+        for tile in tiles {
             if !height_cache(&config.cache_dir, tile).exists() {
                 return Err(format!(
                     "no cached Terrarium tile {}/{}/{} and TERRA_TILES_FETCH=0",
@@ -221,50 +237,71 @@ pub fn load_patch(config: &GeoTileConfig, extent: f32) -> Result<GeoPatch, Strin
         }
     }
     let mut grids = HeightGrids::default();
-    {
-        let source = TileSource::new(&NetworkConfig {
-            threads: 2,
-            cache_dir: config.cache_dir.clone(),
-            texture_url: terrarium_template(),
-            heightmap_url: terrarium_template(),
-            normals_url: terrarium_template(),
-            native_terrain_zoom: NATIVE_ZOOM,
-            connect_timeout: Duration::from_secs(4),
-            read_timeout: Duration::from_secs(8),
-            ..default()
+    let source = TileSource::new(&NetworkConfig {
+        threads: 2,
+        cache_dir: config.cache_dir.clone(),
+        texture_url: terrarium_template(),
+        heightmap_url: terrarium_template(),
+        normals_url: terrarium_template(),
+        native_terrain_zoom: NATIVE_ZOOM,
+        connect_timeout: Duration::from_secs(4),
+        read_timeout: Duration::from_secs(8),
+        ..default()
+    });
+    for tile in tiles {
+        source.request(TileRequest {
+            key: tile.key,
+            x: tile.provider_x,
+            z: tile.provider_z,
         });
-        for tile in &tiles {
-            source.request(TileRequest {
-                key: tile.key,
-                x: tile.provider_x,
-                z: tile.provider_z,
+    }
+    let deadline = Instant::now() + Duration::from_secs(if config.fetch { 20 } else { 8 });
+    let mut ready = Vec::new();
+    let mut dropped = Vec::new();
+    while grids.0.len() < tiles.len() {
+        source.drain(&mut ready, &mut dropped);
+        for payload in ready.drain(..) {
+            grids.0.insert(payload.key, payload.grid);
+        }
+        if let Some(drop) = dropped.drain(..).next() {
+            return Err(match drop {
+                TileDrop::Failed(key, reason) => {
+                    format!("elevation tile {key:?} failed: {reason}")
+                }
+                TileDrop::Cancelled(key) => format!("elevation tile {key:?} was cancelled"),
             });
         }
-        let deadline = Instant::now() + Duration::from_secs(if config.fetch { 20 } else { 8 });
-        let mut ready = Vec::new();
-        let mut dropped = Vec::new();
-        while grids.0.len() < tiles.len() {
-            source.drain(&mut ready, &mut dropped);
-            for payload in ready.drain(..) {
-                grids.0.insert(payload.key, payload.grid);
-            }
-            if let Some(drop) = dropped.drain(..).next() {
-                return Err(match drop {
-                    TileDrop::Failed(key, reason) => {
-                        format!("elevation tile {key:?} failed: {reason}")
-                    }
-                    TileDrop::Cancelled(key) => format!("elevation tile {key:?} was cancelled"),
-                });
-            }
-            if Instant::now() > deadline {
-                return Err("timed out loading elevation tiles".into());
-            }
-            if grids.0.len() < tiles.len() {
-                std::thread::sleep(Duration::from_millis(10));
-            }
+        if Instant::now() > deadline {
+            return Err("timed out loading elevation tiles".into());
+        }
+        if grids.0.len() < tiles.len() {
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
-    build_patch(&grids, &anchor, extent, config.slope_limit)
+    Ok(grids)
+}
+
+#[cfg(not(feature = "native"))]
+fn fill_grids(_config: &GeoTileConfig, tiles: &[TileRef]) -> Result<HeightGrids, String> {
+    let image = image::load_from_memory(include_bytes!("../assets/geo/terrarium.png"))
+        .map_err(|error| format!("bundled elevation tile: {error}"))?
+        .to_rgb8();
+    let grid = HeightGrid::from_terrarium(&image);
+    let mut grids = HeightGrids::default();
+    for tile in tiles {
+        if tile.key.zoom == BUNDLE_ZOOM
+            && tile.provider_x == BUNDLE_X
+            && tile.provider_z == BUNDLE_Z
+        {
+            grids.0.insert(tile.key, grid.clone());
+        }
+    }
+    if grids.0.is_empty() {
+        return Err(
+            "this browser build only includes the bundled Johnson Center elevation tile".into(),
+        );
+    }
+    Ok(grids)
 }
 
 pub fn build_patch(
@@ -480,10 +517,12 @@ fn slippy_tile(latitude: f64, longitude: f64, zoom: u8) -> (i32, i32) {
     (x.floor() as i32, y.floor() as i32)
 }
 
+#[cfg(feature = "native")]
 fn terrarium_template() -> String {
     "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/:zoom:/:x:/:y:.png".into()
 }
 
+#[cfg(feature = "native")]
 fn height_cache(cache: &Path, tile: &TileRef) -> PathBuf {
     cache
         .join("heightmap")
@@ -492,6 +531,7 @@ fn height_cache(cache: &Path, tile: &TileRef) -> PathBuf {
         .join(format!("{}.png", tile.provider_z))
 }
 
+#[cfg(feature = "native")]
 fn seed_bundle(cache: &Path, tiles: &[TileRef]) -> Result<(), String> {
     for tile in tiles {
         if tile.key.zoom != BUNDLE_ZOOM

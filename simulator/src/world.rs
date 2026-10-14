@@ -281,19 +281,23 @@ fn generate_world(
             ));
         }
     }
-    let mut camera = commands.spawn((
-        Name::new("Terra world camera"),
-        WorldElement,
-        WorldCamera,
-        Camera3d::default(),
-        Transform::from_translation(config.camera_offset).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
-    #[cfg(feature = "native")]
-    camera.insert(
-        bevy_voxel_world::prelude::VoxelWorldCamera::<crate::voxel_terrain::TerraVoxelTerrain>::default(
-        ),
-    );
+    let camera = commands
+        .spawn((
+            Name::new("Terra world camera"),
+            WorldElement,
+            WorldCamera,
+            Camera3d::default(),
+            Transform::from_translation(config.camera_offset).looking_at(Vec3::ZERO, Vec3::Y),
+        ))
+        .id();
+    #[cfg(not(feature = "native"))]
     let _ = camera;
+    #[cfg(feature = "native")]
+    commands
+        .entity(camera)
+        .insert(bevy_voxel_world::prelude::VoxelWorldCamera::<
+            crate::voxel_terrain::TerraVoxelTerrain,
+        >::default());
     commands.spawn((
         Name::new("Sun"),
         WorldElement,
@@ -351,7 +355,12 @@ fn apply_session(world: &mut World) {
     }
     let mut doomed = Vec::new();
     {
-        let mut query = world.query_filtered::<Entity, Or<(With<WorldElement>, With<Rover>, With<crate::next_competition::NextField>, With<crate::mission::MissionObstacle>)>>();
+        let mut query = world.query_filtered::<Entity, Or<(
+            With<WorldElement>,
+            With<Rover>,
+            With<crate::next_competition::NextField>,
+            With<crate::mission::MissionObstacle>,
+        )>>();
         for entity in query.iter(world) {
             doomed.push(entity);
         }

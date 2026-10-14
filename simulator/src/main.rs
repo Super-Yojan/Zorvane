@@ -1,4 +1,3 @@
-mod target_search;
 mod depth_camera;
 mod geo;
 mod landscape;
@@ -9,11 +8,14 @@ mod occupancy_map;
 mod physics;
 mod rgb_camera;
 mod session;
+mod target_search;
 mod terra;
 mod vehicle;
 mod velocity_controller;
 #[cfg(feature = "native")]
 mod voxel_terrain;
+#[cfg(not(feature = "native"))]
+mod web_tiles;
 mod world;
 #[cfg(feature = "native")]
 mod zenoh_bridge;
@@ -60,10 +62,17 @@ fn main() {
     }
     mission::install(&mut app);
     next_competition::install(&mut app);
-    let defaults = DefaultPlugins.set(AssetPlugin {
+    let mut assets = AssetPlugin {
         file_path: asset_root(),
         ..default()
-    });
+    };
+    // A static host has no .meta sidecars. Skipping the lookup avoids a 404
+    // before each asset, including the 118 MB rover mesh.
+    #[cfg(target_arch = "wasm32")]
+    {
+        assets.meta_check = bevy::asset::AssetMetaCheck::Never;
+    }
+    let defaults = DefaultPlugins.set(assets);
     if std::env::var("TERRA_HEADLESS").as_deref() == Ok("1") {
         app.add_plugins(
             defaults

@@ -217,12 +217,7 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool) {
                         Color::srgb(0.75, 0.78, 0.80),
                     );
                     if !session.note.is_empty() {
-                        label(
-                            panel,
-                            &session.note,
-                            15.0,
-                            Color::srgb(0.95, 0.72, 0.45),
-                        );
+                        label(panel, &session.note, 15.0, Color::srgb(0.95, 0.72, 0.45));
                     }
                     label(panel, "World", 14.0, Color::srgb(0.62, 0.68, 0.70));
                     for choice in [WorldChoice::Town, WorldChoice::Tiles, WorldChoice::Next] {
@@ -243,12 +238,7 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool) {
                         })
                         .with_children(|row| {
                             button(row, "−", RoverStep(-1), false);
-                            label(
-                                row,
-                                &format!("{}", session.rover_count),
-                                22.0,
-                                Color::WHITE,
-                            );
+                            label(row, &format!("{}", session.rover_count), 22.0, Color::WHITE);
                             button(row, "+", RoverStep(1), false);
                         });
                     if paused {
@@ -273,12 +263,7 @@ fn label(parent: &mut ChildSpawnerCommands, text: &str, size: f32, color: Color)
     ));
 }
 
-fn button<T: Component>(
-    parent: &mut ChildSpawnerCommands,
-    text: &str,
-    marker: T,
-    selected: bool,
-) {
+fn button<T: Component>(parent: &mut ChildSpawnerCommands, text: &str, marker: T, selected: bool) {
     let color = if selected {
         Color::srgb(0.12, 0.45, 0.40)
     } else {

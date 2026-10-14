@@ -1,4 +1,9 @@
 //! Seeded roads, town blocks, procedural forests and a small animated pond.
+#[cfg(not(feature = "native"))]
+use crate::web_tiles::{
+    HeightGrid, HeightGrids, MIN_ZOOM, TerrainAnchor, TileKey, WorldConfig as TileWorldConfig,
+    ground_height,
+};
 use crate::world::{WorldConfig, WorldElement};
 use avian3d::prelude::*;
 use bevy::{
@@ -17,6 +22,7 @@ use bevy_water::{
     WaterPlugin, WaterQuality, WaterSettings, WaterTile, WaveDirection,
     water::material::{StandardWaterMaterial, WaterMaterial},
 };
+#[cfg(feature = "native")]
 use bevytiles::{
     config::{MIN_ZOOM, TerrainAnchor, WorldConfig as TileWorldConfig},
     height::{HeightGrid, HeightGrids, ground_height},
