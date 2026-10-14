@@ -37,6 +37,13 @@ sudo apt-get install -y pkg-config build-essential \
 cargo run -p zorvane
 ```
 
+The normal build includes Terra's A* waypoint routing; no adjacent Terra
+checkout or local launcher is required. With Zenoh enabled, select `waypoint`
+autonomy and send a goal through the existing rover topics. The rover plans
+around obstacles in its depth-derived occupancy map. Unknown or unreachable
+routes hold motion until a safe route becomes available. Route points are
+published as `global_route` in `autonomy/status` when a route is available.
+
 Headless, without Zenoh, exiting after the world schedule starts:
 
 ```sh
