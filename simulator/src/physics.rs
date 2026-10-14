@@ -240,8 +240,11 @@ mod tests {
         );
         tick(&mut app, 240);
         let z = app.world().get::<Position>(entity).unwrap().z;
+        let half_length = RoverPhysicsConfig::default().chassis_size.z * 0.5;
+        // Wall collider is 0.2 m thick, centred at z = -2, so the near face is -1.9.
+        let wall_near = -1.9;
         assert!(
-            z < -1.0 && z > -1.7,
+            z < -1.0 && z > wall_near + half_length - 0.08,
             "rover penetrated wall or failed to move: {z}"
         );
         *app.world_mut().get_mut::<DriveCommand>(entity).unwrap() = DriveCommand::default();

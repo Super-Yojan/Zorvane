@@ -1,24 +1,40 @@
-//! NEXT competition practice field for Zatara.
+//! NEXT competition field for Zatara.
 //!
-//! A small-sided soccer pitch with tennis balls and open-front deposit buckets.
-//! Dimensions are a clean practice layout, not an official surveyed field.
-//! The primary rover is named Zatara. It is spawn slot 0 of the active body,
-//! which defaults to `terra-ground` (Terra's chassis and differential drive).
-//! Zatara is not a separate vehicle type.
+//! A full soccer pitch at the FIFA Laws of the Game recommended international
+//! size, with tennis balls and open-front deposit buckets. The primary rover
+//! is named Zatara. It is spawn slot 0 of the active body, which defaults to
+//! `terra-ground` (Terra's chassis and differential drive). Zatara is not a
+//! separate vehicle type.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-/// Square ground that contains the pitch, boards, and camera apron.
-pub const WORLD_SIZE: f32 = 32.0;
-/// Pitch width along Bevy X, metres.
-pub const PITCH_HALF_WIDTH: f32 = 6.0;
-/// South goal line. Zatara spawns at the origin, on this half, facing −Z.
-pub const PITCH_SOUTH: f32 = 5.0;
+/// FIFA Laws of the Game, Law 1, recommended size for international matches.
+/// User decision: use this size for the NEXT pitch.
+pub const PITCH_LENGTH: f32 = 105.0;
+/// FIFA Laws of the Game, Law 1, recommended width for international matches.
+pub const PITCH_WIDTH: f32 = 68.0;
+/// Centre circle radius, metres (10 yards).
+pub const CENTER_CIRCLE_RADIUS: f32 = 9.15;
+/// Penalty area depth from the goal line, metres (18 yards).
+pub const PENALTY_AREA_DEPTH: f32 = 16.5;
+/// Penalty area width, metres (44 yards: 16.5 + 7.32 + 16.5).
+pub const PENALTY_AREA_WIDTH: f32 = 40.32;
+/// Goal area depth from the goal line, metres (6 yards).
+pub const GOAL_AREA_DEPTH: f32 = 5.5;
+/// Goal area width, metres (20 yards: 5.5 + 7.32 + 5.5).
+pub const GOAL_AREA_WIDTH: f32 = 18.32;
+/// Square ground that contains the pitch, boards, and an apron.
+pub const WORLD_SIZE: f32 = 120.0;
+/// Pitch half-width along Bevy X, metres.
+pub const PITCH_HALF_WIDTH: f32 = PITCH_WIDTH * 0.5;
+/// South goal line. The pitch is centred on the origin. Zatara spawns there, facing −Z.
+pub const PITCH_SOUTH: f32 = PITCH_LENGTH * 0.5;
 /// North goal line. Deposit buckets sit inside this end.
-pub const PITCH_NORTH: f32 = PITCH_SOUTH - 18.0;
+pub const PITCH_NORTH: f32 = -PITCH_LENGTH * 0.5;
 const BOARD_HEIGHT: f32 = 0.28;
 const BOARD_THICKNESS: f32 = 0.12;
+const LINE_WIDTH: f32 = 0.08;
 const MARKING_Y: f32 = 0.008;
 
 /// Regulation tennis ball, metres and kilograms.
@@ -316,15 +332,15 @@ fn spawn_field_contents(
         ));
     }
     eprintln!(
-        "Terra NEXT: Zatara practice pitch, {} tennis balls, {} deposit buckets. W/A/S/D drives the primary rover when Zenoh is off.",
+        "Terra NEXT: Zatara on a {PITCH_LENGTH} m by {PITCH_WIDTH} m pitch, {} tennis balls, {} deposit buckets. W/A/S/D drives the primary rover when Zenoh is off.",
         ball_positions().len(),
         buckets().len()
     );
 }
 
 fn paint_lines(commands: &mut Commands, cube: &Handle<Mesh>, line: &Handle<StandardMaterial>) {
-    let length = PITCH_SOUTH - PITCH_NORTH;
-    let width = PITCH_HALF_WIDTH * 2.0;
+    let length = PITCH_LENGTH;
+    let width = PITCH_WIDTH;
     let mid_z = (PITCH_SOUTH + PITCH_NORTH) * 0.5;
     let y = MARKING_Y;
     let stripe = |commands: &mut Commands, center: Vec3, size: Vec3| {
@@ -336,63 +352,79 @@ fn paint_lines(commands: &mut Commands, cube: &Handle<Mesh>, line: &Handle<Stand
             Transform::from_translation(center).with_scale(size),
         ));
     };
+    let area = |commands: &mut Commands, goal_z: f32, depth: f32, half_width: f32| {
+        // Positive Z is south. The box runs from the goal line into the field.
+        let sign = if goal_z > 0.0 { -1.0 } else { 1.0 };
+        stripe(
+            commands,
+            Vec3::new(0.0, y, goal_z + sign * depth),
+            Vec3::new(half_width * 2.0, 0.006, LINE_WIDTH),
+        );
+        stripe(
+            commands,
+            Vec3::new(-half_width, y, goal_z + sign * depth * 0.5),
+            Vec3::new(LINE_WIDTH, 0.006, depth),
+        );
+        stripe(
+            commands,
+            Vec3::new(half_width, y, goal_z + sign * depth * 0.5),
+            Vec3::new(LINE_WIDTH, 0.006, depth),
+        );
+    };
     // Touchlines, goal lines, and the halfway line.
     stripe(
         commands,
         Vec3::new(0.0, y, PITCH_SOUTH),
-        Vec3::new(width, 0.006, 0.08),
+        Vec3::new(width, 0.006, LINE_WIDTH),
     );
     stripe(
         commands,
         Vec3::new(0.0, y, PITCH_NORTH),
-        Vec3::new(width, 0.006, 0.08),
+        Vec3::new(width, 0.006, LINE_WIDTH),
     );
     stripe(
         commands,
         Vec3::new(-PITCH_HALF_WIDTH, y, mid_z),
-        Vec3::new(0.08, 0.006, length),
+        Vec3::new(LINE_WIDTH, 0.006, length),
     );
     stripe(
         commands,
         Vec3::new(PITCH_HALF_WIDTH, y, mid_z),
-        Vec3::new(0.08, 0.006, length),
+        Vec3::new(LINE_WIDTH, 0.006, length),
     );
     stripe(
         commands,
         Vec3::new(0.0, y, mid_z),
-        Vec3::new(width, 0.006, 0.08),
+        Vec3::new(width, 0.006, LINE_WIDTH),
     );
-    // Penalty areas at each end. Buckets occupy the north area.
     for goal_z in [PITCH_SOUTH, PITCH_NORTH] {
-        let sign = if goal_z > 0.0 { -1.0 } else { 1.0 };
-        let box_depth = 2.6;
-        let box_half = 3.4;
-        let near_z = goal_z + sign * box_depth;
-        stripe(
+        area(
             commands,
-            Vec3::new(0.0, y, near_z),
-            Vec3::new(box_half * 2.0, 0.006, 0.08),
+            goal_z,
+            PENALTY_AREA_DEPTH,
+            PENALTY_AREA_WIDTH * 0.5,
         );
-        stripe(
-            commands,
-            Vec3::new(-box_half, y, goal_z + sign * box_depth * 0.5),
-            Vec3::new(0.08, 0.006, box_depth),
-        );
-        stripe(
-            commands,
-            Vec3::new(box_half, y, goal_z + sign * box_depth * 0.5),
-            Vec3::new(0.08, 0.006, box_depth),
-        );
+        area(commands, goal_z, GOAL_AREA_DEPTH, GOAL_AREA_WIDTH * 0.5);
     }
-    let segments = 24;
-    let radius = 1.7;
+    // Centre circle. Each dash is rotated along the tangent so the 9.15 m
+    // radius reads as a line instead of a ring of axis-aligned blobs.
+    let segments = 96;
+    let arc = std::f32::consts::TAU * CENTER_CIRCLE_RADIUS / segments as f32;
     for index in 0..segments {
         let angle = index as f32 * std::f32::consts::TAU / segments as f32;
-        stripe(
-            commands,
-            Vec3::new(angle.cos() * radius, y, mid_z + angle.sin() * radius),
-            Vec3::new(0.16, 0.006, 0.16),
-        );
+        commands.spawn((
+            Name::new("NEXT line"),
+            NextField,
+            Mesh3d(cube.clone()),
+            MeshMaterial3d(line.clone()),
+            Transform::from_translation(Vec3::new(
+                angle.cos() * CENTER_CIRCLE_RADIUS,
+                y,
+                mid_z + angle.sin() * CENTER_CIRCLE_RADIUS,
+            ))
+            .with_rotation(Quat::from_rotation_y(-angle))
+            .with_scale(Vec3::new(LINE_WIDTH, 0.006, arc * 1.08)),
+        ));
     }
     stripe(
         commands,
@@ -475,6 +507,17 @@ mod tests {
         }
         assert!(WORLD_SIZE * 0.5 > PITCH_HALF_WIDTH + 1.0);
         assert!(WORLD_SIZE * 0.5 > PITCH_SOUTH.abs().max(PITCH_NORTH.abs()) + 1.0);
+        assert_eq!(PITCH_LENGTH, 105.0);
+        assert_eq!(PITCH_WIDTH, 68.0);
+        assert_eq!(CENTER_CIRCLE_RADIUS, 9.15);
+        assert_eq!(PENALTY_AREA_DEPTH, 16.5);
+        assert_eq!(PENALTY_AREA_WIDTH, 40.32);
+        assert_eq!(GOAL_AREA_DEPTH, 5.5);
+        assert_eq!(GOAL_AREA_WIDTH, 18.32);
+        assert!(GOAL_AREA_DEPTH < PENALTY_AREA_DEPTH);
+        assert!(GOAL_AREA_WIDTH < PENALTY_AREA_WIDTH);
+        assert!(PENALTY_AREA_WIDTH < PITCH_WIDTH);
+        assert!(PENALTY_AREA_DEPTH * 2.0 < PITCH_LENGTH);
         let mut seen_x = [false; 2];
         for pose in buckets() {
             let bucket = pose.bucket();
@@ -491,11 +534,18 @@ mod tests {
             assert!((left.center.x + left.size.x * 0.5 - bucket.interior_min.x).abs() < 1e-4);
             assert!((right.center.x - right.size.x * 0.5 - bucket.interior_max.x).abs() < 1e-4);
             assert!(bucket.contains(bucket.rest));
+            let goal_half = GOAL_AREA_WIDTH * 0.5;
+            assert!(
+                pose.center_x.abs() + pose.interior_width * 0.5 < goal_half,
+                "bucket must sit inside the north goal area"
+            );
+            assert!(pose.mouth_z > PITCH_NORTH && pose.mouth_z < PITCH_NORTH + GOAL_AREA_DEPTH);
+            assert!(bucket.interior_min.z > PITCH_NORTH);
             seen_x[usize::from(pose.center_x > 0.0)] = true;
         }
         assert_eq!(seen_x, [true, true]);
-        assert_eq!(PITCH_SOUTH - PITCH_NORTH, 18.0);
-        assert_eq!(PITCH_HALF_WIDTH * 2.0, 12.0);
+        assert_eq!(PITCH_SOUTH - PITCH_NORTH, PITCH_LENGTH);
+        assert_eq!(PITCH_HALF_WIDTH * 2.0, PITCH_WIDTH);
         for board in pitch_boards() {
             assert!(board.size.min_element() > 0.0);
             assert!(board.center.y > 0.0);
@@ -509,6 +559,8 @@ mod tests {
         assert!(!config.landscape.enabled);
         assert!(!config.tiles.enabled);
         assert_eq!(config.size, WORLD_SIZE);
+        assert!(config.camera_offset.y < 8.0 && config.camera_offset.z < 10.0);
+        assert!(config.follow_rover);
         assert!(config.validate().is_ok());
     }
 

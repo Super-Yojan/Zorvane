@@ -94,7 +94,7 @@ GPU tests are `#[ignore]`. They write `/tmp/terra-world-preview.png`.
 | `TERRA_ZOOM` | `15` | Slippy zoom, 9 through 15. |
 | `TERRA_TILES_FETCH` | on | `0` uses cache and the bundled tile only. |
 | `TERRA_TILE_CACHE` | `simulator/.cache/tiles` | Tile cache. |
-| `TERRA_WORLD_SIZE` | `100` | Metres. NEXT forces 32. Tiles need 40–512. |
+| `TERRA_WORLD_SIZE` | `100` | Metres. NEXT forces 120. Tiles need 40–512. |
 | `TERRA_MISSION` | off | `1` loads seeded rubble on a flat square. |
 | `TERRA_MISSION_SEED` | `42` | Landscape seed and rubble seed. |
 | `TERRA_ROVER_COUNT` | `1` | Fleet size, 0 through 32. |

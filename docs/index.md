@@ -26,7 +26,7 @@ Part of [super-yojan.dev](https://super-yojan.dev). Source: [Super-Yojan/Zorvane
 | --- | --- |
 | *(none)* | Practice town, 100 m |
 | `TERRA_TILES=1` | Elevation patch around a map anchor |
-| `TERRA_NEXT=1` | NEXT pitch, 32 m |
+| `TERRA_NEXT=1` | NEXT pitch, 105 × 68 m |
 
 A windowed run opens a start screen for those three worlds. The browser build is [Zorvane play](https://super-yojan.dev/Zorvane/play/). More on [Worlds](worlds.md) and [Running](running.md).
 

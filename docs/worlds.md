@@ -15,7 +15,7 @@
 
 ![NEXT pitch](assets/next.png)
 
-*32 m square. Zatara faces two buckets. Six tennis balls.*
+*105 m by 68 m pitch on a 120 m square. Zatara starts at the centre spot.*
 
 | Order | Switch | Layout |
 | --- | --- | --- |

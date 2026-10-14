@@ -66,22 +66,23 @@ pub trait VehicleBody: Send + Sync {
     fn locomotion(&self) -> Locomotion;
 }
 
-/// Inches to metres. `rover.glb` is a Blender glTF of the Terra CAD model,
-/// and its coordinates are inches. See `SCALE.md`.
-pub const INCH_IN_METRES: f32 = 0.0254;
+/// Centimetres to metres. Terra's published CAD stage does not set
+/// `metersPerUnit`, so USD's default of 0.01 m per unit applies. `rover.glb`
+/// has the same vertex magnitudes. See `SCALE.md`.
+pub const CENTIMETRE_IN_METRES: f32 = 0.01;
 
-/// Axis-aligned size of glTF node `Robot` in `simulator/assets/models/rover.glb`, inches.
+/// Axis-aligned size of glTF node `Robot` in `simulator/assets/models/rover.glb`, centimetres.
 /// X is width, Y is height, Z is length.
-pub const CAD_SIZE_IN: [f32; 3] = [40.26650047302246, 14.448528289794922, 38.44781684875488];
+pub const CAD_SIZE_CM: [f32; 3] = [40.26650047302246, 14.448528289794922, 38.44781684875488];
 
-/// Tread radius of the four dark wheel meshes in that glTF, inches.
-pub const CAD_WHEEL_RADIUS_IN: f32 = 4.51;
+/// Tread radius of the four dark wheel meshes in that glTF, centimetres.
+pub const CAD_WHEEL_RADIUS_CM: f32 = 4.51;
 
-/// Distance between the left and right wheel centres in that glTF, inches.
-pub const CAD_TRACK_WIDTH_IN: f32 = 35.0495;
+/// Distance between the left and right wheel centres in that glTF, centimetres.
+pub const CAD_TRACK_WIDTH_CM: f32 = 35.0495;
 
 /// Terra's ground chassis: the GLB, collider, and differential-drive geometry
-/// measured from the CAD mesh in `rover.glb`.
+/// measured from the CAD mesh in `rover.glb`, converted from centimetres.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TerraGround;
 
@@ -103,23 +104,25 @@ impl VehicleBody for TerraGround {
     fn chassis(&self) -> ChassisSpec {
         ChassisSpec {
             size_xyz: [
-                CAD_SIZE_IN[0] * INCH_IN_METRES,
-                CAD_SIZE_IN[1] * INCH_IN_METRES,
-                CAD_SIZE_IN[2] * INCH_IN_METRES,
+                CAD_SIZE_CM[0] * CENTIMETRE_IN_METRES,
+                CAD_SIZE_CM[1] * CENTIMETRE_IN_METRES,
+                CAD_SIZE_CM[2] * CENTIMETRE_IN_METRES,
             ],
             // Not on the CAD mesh or in the Terra build notes. Kept from the
             // previous simulator default. See SCALE.md.
             mass_kg: 20.0,
-            visual_scale: INCH_IN_METRES,
+            visual_scale: CENTIMETRE_IN_METRES,
         }
     }
 
     fn locomotion(&self) -> Locomotion {
         Locomotion::DifferentialDrive(DifferentialDriveSpec {
-            wheel_radius_m: CAD_WHEEL_RADIUS_IN * INCH_IN_METRES,
-            track_width_m: CAD_TRACK_WIDTH_IN * INCH_IN_METRES,
-            // Not measured from the motors. Kept from the previous default.
-            max_wheel_speed_rad_s: 20.0,
+            wheel_radius_m: CAD_WHEEL_RADIUS_CM * CENTIMETRE_IN_METRES,
+            track_width_m: CAD_TRACK_WIDTH_CM * CENTIMETRE_IN_METRES,
+            // Not measured from the motors. The old default was 20 rad/s on a
+            // wheel that had been scaled as inches (~2.29 m/s). Keep that
+            // linear cap at the centimetre radius.
+            max_wheel_speed_rad_s: 20.0 * 0.0254 / CENTIMETRE_IN_METRES,
             keyboard_linear_speed: 1.5,
             keyboard_angular_speed: 1.5,
         })
@@ -214,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn terra_ground_uses_cad_inches_as_metres() {
+    fn terra_ground_uses_cad_centimetres_as_metres() {
         let body = TerraGround;
         assert_eq!(body.id(), "terra-ground");
         assert_eq!(body.display_name(), "Terra");
@@ -223,24 +226,35 @@ mod tests {
             body.chassis(),
             ChassisSpec {
                 size_xyz: [
-                    CAD_SIZE_IN[0] * INCH_IN_METRES,
-                    CAD_SIZE_IN[1] * INCH_IN_METRES,
-                    CAD_SIZE_IN[2] * INCH_IN_METRES,
+                    CAD_SIZE_CM[0] * CENTIMETRE_IN_METRES,
+                    CAD_SIZE_CM[1] * CENTIMETRE_IN_METRES,
+                    CAD_SIZE_CM[2] * CENTIMETRE_IN_METRES,
                 ],
                 mass_kg: 20.0,
-                visual_scale: INCH_IN_METRES,
+                visual_scale: CENTIMETRE_IN_METRES,
             }
         );
         let locomotion = body.locomotion();
         let drive = locomotion.differential().unwrap();
-        assert_eq!(drive.wheel_radius_m, CAD_WHEEL_RADIUS_IN * INCH_IN_METRES);
-        assert_eq!(drive.track_width_m, CAD_TRACK_WIDTH_IN * INCH_IN_METRES);
-        assert_eq!(drive.max_wheel_speed_rad_s, 20.0);
+        assert_eq!(
+            drive.wheel_radius_m,
+            CAD_WHEEL_RADIUS_CM * CENTIMETRE_IN_METRES
+        );
+        assert_eq!(
+            drive.track_width_m,
+            CAD_TRACK_WIDTH_CM * CENTIMETRE_IN_METRES
+        );
+        assert_eq!(
+            drive.max_wheel_speed_rad_s,
+            20.0 * 0.0254 / CENTIMETRE_IN_METRES
+        );
         assert_eq!(drive.keyboard_linear_speed, 1.5);
         assert_eq!(drive.keyboard_angular_speed, 1.5);
-        // A 40-inch rover is about a metre wide, not a centimetre-scale model.
-        assert!(body.chassis().size_xyz[0] > 1.0);
-        assert!(body.chassis().size_xyz[0] < 1.1);
+        // 40 cm wide, not the 1 m body you get by reading those units as inches.
+        let size = body.chassis().size_xyz;
+        assert!(size[0] > 0.40 && size[0] < 0.41, "{size:?}");
+        assert!(size[1] > 0.14 && size[1] < 0.15, "{size:?}");
+        assert!(size[2] > 0.38 && size[2] < 0.39, "{size:?}");
     }
 
     #[test]
