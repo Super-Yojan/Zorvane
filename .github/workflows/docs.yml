@@ -19,7 +19,9 @@ jobs:
   # Static wasm sim. Nested under the existing Pages site so this does not
   # replace the docs deploy. A failed play build still publishes the docs.
   play:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Pull requests build the sim too, so the Pages artifact can be checked
+    # before merge. Only a push to main deploys it.
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -107,8 +109,16 @@ jobs:
           name: zorvane-play
           path: site/play
 
+      - name: Check the play build is inside the site
+        if: needs.play.result == 'success'
+        run: |
+          set -euo pipefail
+          test -f site/play/index.html
+          find site/play -maxdepth 1 -name '*_bg.wasm' -print -quit | grep -q .
+          grep -q '/Zorvane/play/' site/play/index.html
+
       - name: Upload Pages artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
