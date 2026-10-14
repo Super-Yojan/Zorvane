@@ -17,6 +17,9 @@ use terra_waypoint::{GoalCommand, decode_goal, encode_status};
 use terra_waypoint::{GoalState, WaypointConfig, WaypointController};
 use zenoh::Wait;
 
+#[path = "publish_gate.rs"]
+mod publish_gate;
+
 #[derive(Clone, Resource)]
 pub struct ZenohBridgeConfig {
     pub enabled: bool,
@@ -120,7 +123,29 @@ struct Outgoing {
     fleet: Option<Vec<u8>>,
     goals: BTreeMap<u64, Vec<u8>>,
     states: BTreeMap<(u64, String), Vec<u8>>,
+    occupancy: BTreeMap<u64, OccupancyPublication>,
+    occupancy_heartbeats: std::collections::BTreeSet<u64>,
     reports:BTreeMap<u64,Vec<Vec<u8>>>,
+}
+struct OccupancyPublication {
+    payload: Vec<u8>,
+    baseline: OccupancyBaseline,
+}
+#[derive(Serialize)]
+struct OccupancyBaseline {
+    schema_version: u8,
+    rover_id: u64,
+    run_id: String,
+    sequence: u64,
+}
+impl Outgoing {
+    fn queue_occupancy(&mut self, id: u64, run_id: &str, sequence: u64, grid: &terra_mapping::MapSnapshot) {
+        self.occupancy_heartbeats.remove(&id);
+        self.occupancy.insert(id, OccupancyPublication {
+            payload: serde_json::to_vec(&terra_autonomy::occupancy_telemetry(id, run_id, sequence, grid)).unwrap(),
+            baseline: OccupancyBaseline { schema_version: 1, rover_id: id, run_id: run_id.into(), sequence },
+        });
+    }
 }
 #[derive(Clone)]
 struct GoalInbox {
@@ -453,6 +478,7 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
         "Terra Zenoh ready: {}/<id>/{{cmd_vel,goal}}, {}/<id>/goal/status, {}/<id>/camera/{{rgb,depth}} (depth includes exposure pose), {}/fleet/{{size,state}}",
         config.prefix, config.prefix, config.prefix, config.prefix
     );
+    let mut occupancy_baselines = BTreeMap::<u64, OccupancyBaseline>::new();
     while !shared.stop.load(Ordering::Acquire) {
         let outgoing = std::mem::take(&mut *shared.outgoing.lock().unwrap());
         for ((id, kind), payload) in outgoing.frames {
@@ -474,12 +500,27 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
         }
         let live: std::collections::BTreeSet<u64> =
             shared.commands.lock().unwrap().keys().copied().collect();
+        occupancy_baselines.retain(|id, _| live.contains(id));
         for ((id, kind), payload) in outgoing.states {
             if live.contains(&id) {
                 session
                     .put(format!("{}/{id}/{kind}", config.prefix), payload)
                     .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
                     .wait()?;
+            }
+        }
+        for (id, publication) in outgoing.occupancy {
+            if live.contains(&id) {
+                session.put(format!("{}/{id}/map/occupancy", config.prefix), publication.payload)
+                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON).wait()?;
+                // Commit only after the paired full payload was published.
+                occupancy_baselines.insert(id, publication.baseline);
+            }
+        }
+        for id in outgoing.occupancy_heartbeats {
+            if live.contains(&id) && let Some(baseline) = occupancy_baselines.get(&id) {
+                session.put(format!("{}/{id}/map/occupancy/heartbeat", config.prefix), serde_json::to_vec(baseline).unwrap())
+                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON).wait()?;
             }
         }
         for (id,reports) in outgoing.reports {if live.contains(&id){for report in reports {session.put(format!("{}/{id}/search/report",config.prefix),report).encoding(zenoh::bytes::Encoding::APPLICATION_JSON).wait()?;}}}
@@ -690,6 +731,27 @@ fn publish_frames(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn latest_occupancy_payload_and_baseline_replace_together() {
+        let mut outgoing = Outgoing::default();
+        let grid = terra_mapping::MapSnapshot {
+            width: 1, height: 1, resolution: 0.1, origin_x: 0.0, origin_y: 0.0,
+            occupancy: vec![100],
+        };
+        outgoing.queue_occupancy(1, "old", 7, &grid);
+        outgoing.occupancy_heartbeats.insert(1);
+        outgoing.queue_occupancy(1, "new", 8, &grid);
+        assert!(!outgoing.occupancy_heartbeats.contains(&1));
+        let drained = std::mem::take(&mut outgoing);
+        assert!(outgoing.occupancy.is_empty());
+        assert_eq!(drained.occupancy.len(), 1);
+        let publication = &drained.occupancy[&1];
+        let payload: serde_json::Value = serde_json::from_slice(&publication.payload).unwrap();
+        assert_eq!(payload["run_id"], publication.baseline.run_id);
+        assert_eq!(payload["sequence"], publication.baseline.sequence);
+        assert_eq!(publication.baseline.run_id, "new");
+        assert_eq!(publication.baseline.sequence, 8);
+    }
     #[test]
     fn accepts_finite_twist_and_rejects_invalid_or_oversized_messages() {
         let command = decode_command(br#"{"linear":1.0,"angular":-0.5}"#).unwrap();
@@ -1344,6 +1406,8 @@ pub(crate) struct AutonomyMotorGate {
 }
 struct AutonomyRuntime {
     rovers: BTreeMap<u64, AutonomousRover>,
+    occupancy_gates: BTreeMap<u64, publish_gate::Gate<terra_mapping::MapSnapshot>>,
+    was_connected: bool,
     start: Instant,
     run_id: String,
     recorder: Option<terra_experiment::RunRecorder>,
@@ -1375,6 +1439,8 @@ impl Default for AutonomyRuntime {
         .ok();
         Self {
             rovers: BTreeMap::new(),
+            occupancy_gates: BTreeMap::new(),
+            was_connected: false,
             start: Instant::now(),
             run_id,
             recorder,
@@ -1414,6 +1480,11 @@ fn drive_autonomy(
     use terra_navigation::{Pose, Twist};
     let now = runtime.start.elapsed().as_secs_f64();
     let tick = time.elapsed_secs_f64();
+    let connected = bridge.shared.connected.load(Ordering::Acquire);
+    if connected != runtime.was_connected {
+        runtime.occupancy_gates.clear();
+        runtime.was_connected = connected;
+    }
     let incoming = bridge.shared.goals.lock().unwrap().clone();
     let remote = bridge.shared.commands.lock().unwrap().clone();
     let mut actions = std::mem::take(&mut *bridge.shared.actions.lock().unwrap());
@@ -1644,9 +1715,6 @@ fn drive_autonomy(
             outgoing
                 .goals
                 .insert(id.0, encode_status(&output.goal).unwrap());
-if let Some(grid)=snapshot.as_ref() {
-    outgoing.states.insert((id.0,"map/occupancy".into()),serde_json::to_vec(&terra_autonomy::occupancy_telemetry(id.0,&runtime.run_id,map.map(|m|m.last_sequence).unwrap_or(0),grid)).unwrap());
-}
             for (kind, value) in [
                 ("hardware/status", serde_json::json!({"version":1,"run_id":runtime.run_id,"ready":true,"armed":true,"arming":false,"simulated":true,"reason":"Simulated actuation ready"})),
                 (
@@ -1673,9 +1741,28 @@ if let Some(grid)=snapshot.as_ref() {
                     .insert((id.0, kind.into()), serde_json::to_vec(&value).unwrap());
             }
         }
+        if connected && let Some(grid) = snapshot.as_ref() {
+            let run_id = runtime.run_id.clone();
+            let sequence = map.map(|m| m.last_sequence).unwrap_or(0);
+            let publication = runtime.occupancy_gates.entry(id.0).or_default().observe(
+                &run_id, grid, sequence, map_time.is_some_and(|t| now - t < 0.5),
+                Duration::from_secs_f64(now),
+                |a, b| a.width == b.width && a.height == b.height && a.resolution == b.resolution
+                    && a.origin_x == b.origin_x && a.origin_y == b.origin_y && a.occupancy == b.occupancy,
+            );
+            let mut outgoing = bridge.shared.outgoing.lock().unwrap();
+            match publication {
+                publish_gate::Publication::Full => {
+                    outgoing.queue_occupancy(id.0, &run_id, sequence, grid);
+                }
+                publish_gate::Publication::Heartbeat => { outgoing.occupancy_heartbeats.insert(id.0); }
+                publish_gate::Publication::None => {}
+            }
+        }
         runtime.rovers.insert(id.0, tracked);
     }
     runtime.rovers.retain(|id, _| seen.contains(id));
+    runtime.occupancy_gates.retain(|id, _| seen.contains(id));
 }
 
 #[cfg(test)]
