@@ -1,10 +1,13 @@
 [project]
 name = "zorvane-client"
 version = "0.1.0"
-description = "Subscribe to one Zorvane rover pose over Zenoh"
+description = "Connect a Zorvane client to the browser simulator"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["eclipse-zenoh>=1.10.1,<1.11"]
+dependencies = []
+
+[project.optional-dependencies]
+native = ["eclipse-zenoh>=1.10.1,<1.11"]
 
 [project.scripts]
 zorvane-pose = "zorvane.__main__:main"

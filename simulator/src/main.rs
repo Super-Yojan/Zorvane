@@ -1,3 +1,5 @@
+#[cfg(any(feature = "native", feature = "browser-bridge"))]
+mod bridge;
 mod depth_camera;
 mod geo;
 mod landscape;
@@ -18,8 +20,6 @@ mod voxel_terrain;
 #[cfg(not(feature = "native"))]
 mod web_tiles;
 mod world;
-#[cfg(feature = "native")]
-mod zenoh_bridge;
 
 use bevy::prelude::*;
 use depth_camera::TerraDepthCameraPlugin;
@@ -114,9 +114,9 @@ fn main() {
             TerraDepthCameraPlugin::default(),
             occupancy_map::TerraOccupancyMapPlugin,
             rgb_camera::TerraRgbCameraPlugin,
-            #[cfg(feature = "native")]
-            zenoh_bridge::TerraZenohPlugin {
-                config: zenoh_bridge::ZenohBridgeConfig::from_env(),
+            #[cfg(any(feature = "native", feature = "browser-bridge"))]
+            bridge::SimulatorBridgePlugin {
+                config: bridge::BridgeConfig::from_env(),
             },
         ));
     if session::interactive_menu() {

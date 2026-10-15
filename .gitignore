@@ -1,5 +1,7 @@
 /target/
 simulator/target/
+simulator/dist/
+simulator/dist-webgpu/
 site/
 docs/reference/
 __pycache__/

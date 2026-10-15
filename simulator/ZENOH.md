@@ -1,6 +1,6 @@
 # Terra fleet, camera frames, and Zenoh control
 
-**TL;DR.** Prefix `terra/rover`. One peer on `tcp/127.0.0.1:7447`. No router. TerraPhone and ARGOS keep their keys.
+**TL;DR.** Prefix `terra/rover`. One peer on `tcp/127.0.0.1:7447`. No router. TerraPhone and ARGOS keep their keys. Student programs use the [browser client](../docs/browser-client.md) instead of this socket.
 
 ```mermaid
 flowchart LR
@@ -263,6 +263,14 @@ frame retained. Older unsent frames are replaced, and congestion may drop frames
 At the default 256×192 resolution, the two raw streams total about 3.75 MiB/s per
 rover before protocol overhead. Rendering/readback rates depend on the GPU and
 fleet size.
+
+## Browser simulator
+
+The browser uses the same topics and payloads over an embedded WebSocket
+gateway in `zorvane-client`; it does not speak native Zenoh or require a router.
+Run `cargo run -p zorvane-client --example print_pose -- --browser`, open the
+pairing URL, and press Start. Full sensor/autonomy support requires WebGPU.
+See [Rust browser client](../docs/browser-client.md) for lifecycle and recording.
 
 ## Configuration and Bevy API
 

@@ -48,6 +48,13 @@ jobs:
         working-directory: simulator
         run: trunk build --release --public-url /Zorvane/play/
 
+      - name: Build WebGPU bridge site
+        working-directory: simulator
+        run: |
+          trunk build webgpu.html --release --html-output index.html --dist dist-webgpu --public-url /Zorvane/play/webgpu/
+          mkdir -p dist/webgpu
+          cp -a dist-webgpu/. dist/webgpu/
+
       - name: Upload play dist
         uses: actions/upload-artifact@v4
         with:
@@ -116,6 +123,9 @@ jobs:
           test -f site/play/index.html
           find site/play -maxdepth 1 -name '*_bg.wasm' -print -quit | grep -q .
           grep -q '/Zorvane/play/' site/play/index.html
+          test -f site/play/webgpu/index.html
+          find site/play/webgpu -maxdepth 1 -name '*_bg.wasm' -print -quit | grep -q .
+          grep -q '/Zorvane/play/webgpu/' site/play/webgpu/index.html
 
       - name: Upload Pages artifact
         if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'

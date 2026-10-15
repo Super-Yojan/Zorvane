@@ -90,6 +90,10 @@ nav:
   - Scale: reference/scale.md
   - Zenoh: reference/zenoh.md
   - Python client: python-client.md
+  - Browser client: browser-client.md
+  - Developing:
+      - Browser gateway: dev/browser-gateway.md
+      - Native Zenoh: dev/native-zenoh.md
   - Depth camera: reference/depth-camera.md
   - Migration from Terra: reference/migration.md
   - API: api.md

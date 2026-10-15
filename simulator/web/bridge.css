@@ -1,0 +1,81 @@
+/* Pairing status uses the bundled Yojan Gautam paper-and-ink tokens. */
+:root{
+--ink:#000000;
+--paper:#FFFFFF;
+--graphite:#525252;
+--ash:#737373;
+--pitch:#0A0A0A;
+--rule:rgba(0,0,0,0.10);
+--rule-inverse:rgba(255,255,255,0.10);
+--graphite-inverse:rgba(255,255,255,0.72);
+--ash-inverse:rgba(255,255,255,0.62);
+
+--surface-page:var(--paper);
+--surface-inverse:var(--pitch);
+--surface-card:var(--paper);
+--surface-fill:var(--ink);
+
+--text-primary:var(--ink);
+--text-secondary:var(--graphite);
+--text-meta:var(--ash);
+--text-inverse:var(--paper);
+--text-inverse-secondary:var(--graphite-inverse);
+--text-inverse-meta:var(--ash-inverse);
+
+--border-hairline:1px solid var(--rule);
+--border-hairline-inverse:1px solid var(--rule-inverse);
+--border-ink:1px solid var(--ink);
+--stroke-plate:var(--ink);
+}
+:root{
+--space-hair:4px;--space-tight:8px;--space-snug:16px;--space-base:24px;--space-wide:32px;--space-loose:64px;
+--space-section:clamp(96px,12vw,200px);
+--shell-max:1600px;--shell-max-prose:860px;--shell-pad:clamp(24px,5vw,64px);
+--grid-gap:64px;
+--marquee-card:clamp(240px,28vw,380px);
+}
+:root{
+--type-display-size:12vw;--type-display-weight:700;--type-display-lh:0.9;--type-display-ls:-0.05em;
+--type-headline-size:clamp(2.5rem,6vw,5rem);--type-headline-weight:700;--type-headline-lh:0.9;--type-headline-ls:-0.05em;
+--type-statement-size:clamp(28px,4.4vw,60px);--type-statement-weight:700;--type-statement-lh:1.05;--type-statement-ls:-0.04em;
+--type-subhead-size:32px;--type-subhead-weight:700;--type-subhead-lh:1.1;--type-subhead-ls:-0.04em;
+--type-title-size:24px;--type-title-weight:700;--type-title-lh:1.1;--type-title-ls:-0.03em;
+--type-lede-size:clamp(19px,2vw,24px);--type-lede-weight:400;--type-lede-lh:1.4;--type-lede-ls:-0.02em;
+--type-body-size:18px;--type-body-weight:400;--type-body-lh:1.5;--type-body-ls:-0.02em;
+--type-label-size:14px;--type-label-weight:400;--type-label-lh:1.2;--type-label-ls:0.1em;
+--measure-prose:68ch;
+}
+.yg-display{font-family:var(--font-display);font-size:var(--type-display-size);font-weight:var(--type-display-weight);line-height:var(--type-display-lh);letter-spacing:var(--type-display-ls);color:var(--text-primary);margin:0}
+.yg-headline{font-family:var(--font-display);font-size:var(--type-headline-size);font-weight:var(--type-headline-weight);line-height:var(--type-headline-lh);letter-spacing:var(--type-headline-ls);color:var(--text-primary);margin:0}
+.yg-statement{font-family:var(--font-display);font-size:var(--type-statement-size);font-weight:var(--type-statement-weight);line-height:var(--type-statement-lh);letter-spacing:var(--type-statement-ls);color:var(--text-primary);margin:0}
+.yg-subhead{font-family:var(--font-display);font-size:var(--type-subhead-size);font-weight:var(--type-subhead-weight);line-height:var(--type-subhead-lh);letter-spacing:var(--type-subhead-ls);color:var(--text-primary);margin:0}
+.yg-title{font-family:var(--font-display);font-size:var(--type-title-size);font-weight:var(--type-title-weight);line-height:var(--type-title-lh);letter-spacing:var(--type-title-ls);color:var(--text-primary);margin:0}
+.yg-lede{font-family:var(--font-body);font-size:var(--type-lede-size);font-weight:var(--type-lede-weight);line-height:var(--type-lede-lh);letter-spacing:var(--type-lede-ls);color:var(--text-secondary);margin:0}
+.yg-body{font-family:var(--font-body);font-size:var(--type-body-size);font-weight:var(--type-body-weight);line-height:var(--type-body-lh);letter-spacing:var(--type-body-ls);color:var(--text-primary);max-width:var(--measure-prose);margin:0}
+.yg-label{font-family:var(--font-mono);font-size:var(--type-label-size);font-weight:var(--type-label-weight);line-height:var(--type-label-lh);letter-spacing:var(--type-label-ls);text-transform:uppercase;color:var(--text-meta);margin:0}
+:root{
+--radius-none:0;--radius-slight:8px;--radius-soft:40px;--radius-sweep:100px;--radius-pill:999px;
+--border-width:1px;
+--shadow-none:none;
+}
+/* No font binaries were supplied with the brief. Inter is loaded from Google Fonts;
+   swap this @import for local @font-face rules if licensed files become available. */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800&display=swap");
+:root{--font-display:Inter,system-ui,sans-serif;--font-body:Inter,system-ui,sans-serif;--font-mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+
+#bridge-status {
+  position: fixed;
+  inset: var(--space-snug) auto auto var(--space-snug);
+  z-index: 10;
+  max-width: min(var(--measure-prose), calc(100vw - var(--space-wide)));
+  margin: 0;
+  padding: var(--space-tight) var(--space-snug);
+  background: var(--surface-page);
+  color: var(--text-primary);
+  border: var(--border-ink);
+  border-radius: var(--radius-none);
+  font-family: var(--font-body);
+  font-size: var(--type-label-size);
+  line-height: var(--type-body-lh);
+  pointer-events: none;
+}

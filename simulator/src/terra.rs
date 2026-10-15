@@ -211,9 +211,14 @@ pub(crate) fn reconcile_fleet(
     world: Option<Res<crate::world::WorldConfig>>,
     vehicles: Option<Res<crate::vehicle::Vehicles>>,
     session: Option<Res<crate::session::SimSession>>,
+    rebuild: Option<Res<crate::session::RebuildWorld>>,
     rovers: Query<(Entity, &RoverId, &RoverSlot, &Transform), With<Rover>>,
 ) {
-    if session.is_some_and(|session| session.phase == crate::session::Phase::Menu) {
+    // Update rebuilds the world after this schedule. Spawning now would consume
+    // IDs for rovers immediately despawned by that rebuild (including rover 0).
+    if rebuild.is_some()
+        || session.is_some_and(|session| session.phase == crate::session::Phase::Menu)
+    {
         return;
     }
     let mut existing: Vec<_> = rovers.iter().collect();
@@ -472,6 +477,36 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn pending_world_rebuild_does_not_consume_the_first_rover_id() {
+        let mut app = App::new();
+        app.insert_resource(DriveConfig::default())
+            .insert_resource(RoverPhysicsConfig::default())
+            .insert_resource(RoverFleet::default())
+            .insert_resource(crate::session::RebuildWorld)
+            .add_systems(Update, reconcile_fleet);
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(
+            world
+                .query_filtered::<&RoverId, With<Rover>>()
+                .iter(world)
+                .count(),
+            0
+        );
+        world.remove_resource::<crate::session::RebuildWorld>();
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(
+            world
+                .query_filtered::<&RoverId, With<Rover>>()
+                .single(world)
+                .unwrap()
+                .0,
+            0
+        );
+    }
+
     #[test]
     fn fleet_grows_shrinks_and_does_not_reuse_retired_ids() {
         let mut app = App::new();

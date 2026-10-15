@@ -4,7 +4,7 @@
     Zorvane is the world.
     [Terra](https://super-yojan.dev/Terra/) is the vehicle.
     [ARGOS](https://super-yojan.dev/ARGOS/) is the operator.
-    They meet on Zenoh, prefix `terra/rover`, port `7447`.
+    A student client connects through the browser simulator.
 
 ![Practice town in the simulator](assets/town.png)
 

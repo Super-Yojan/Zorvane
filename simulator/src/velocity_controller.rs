@@ -8,9 +8,9 @@ use terra_types::{
     ImuSample, MotorOutput, Quaternion, StopReason, Vector3, VelocityTarget, VioSample,
 };
 
-#[cfg(feature = "native")]
-use crate::zenoh_bridge::AutonomyMotorGate;
-#[cfg(not(feature = "native"))]
+#[cfg(any(feature = "native", feature = "browser-bridge"))]
+use crate::bridge::AutonomyMotorGate;
+#[cfg(not(any(feature = "native", feature = "browser-bridge")))]
 #[derive(Component)]
 struct AutonomyMotorGate {
     hold: bool,
