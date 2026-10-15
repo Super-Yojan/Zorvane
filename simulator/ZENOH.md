@@ -108,6 +108,7 @@ rover. The per-rover keys are:
 | Key | Payload |
 | --- | --- |
 | `terra/rover/<id>/cmd_vel` | JSON `{"linear":1.0,"angular":0.3}` (debug twist) |
+| `terra/rover/<id>/pose` | JSON `{"x":1.0,"y":2.0,"yaw":0.3,"heading":0.3}` about 10 Hz |
 | `terra/rover/<id>/goal` | JSON go-to-waypoint, published once and latched |
 | `terra/rover/<id>/goal/status` | JSON progress for the latched goal |
 | `terra/rover/<id>/camera/rgb` | Frame packet, `RGBA8_SRGB` |
@@ -266,13 +267,25 @@ fleet size.
 ## Configuration and Bevy API
 
 The default Zenoh peer listens on `tcp/127.0.0.1:7447`, without multicast discovery.
-The supplied client connects directly; no separate router is required.
+The supplied client connects directly; no separate router is required for a native
+simulator and a native script. A student router, including the WebSocket the
+browser build needs, is described in [Step 2](../docs/step-2.md).
+
+`terra/rover/<id>/pose` is the rover's own position, published about ten times a
+second while the bridge is connected. `x` is −Bevy Z, `y` is −Bevy X, and yaw 0
+faces Bevy −Z (robotics +x). `heading` is the same number as `yaw`, in radians.
+`goal/status` still reports the goal, not this pose. Depth packets also carry a
+body pose; the pose key is the one to print for Step 2.
+
+Set `TERRA_ZENOH_CONNECT` to join a router instead of listening. The simulator
+and a router cannot both bind `7447`.
 
 | Environment variable | Purpose |
 | --- | --- |
 | `TERRA_ROVER_COUNT` | Initial count, default 1 |
 | `TERRA_ZENOH` | Set to `0` to disable the bridge |
-| `TERRA_ZENOH_LISTEN` | Listener endpoint |
+| `TERRA_ZENOH_LISTEN` | Listener endpoint when `TERRA_ZENOH_CONNECT` is unset |
+| `TERRA_ZENOH_CONNECT` | Client endpoint, for example `tcp/127.0.0.1:7447`. Wins over listen |
 | `TERRA_ZENOH_PREFIX` | Topic prefix |
 | `TERRA_ZENOH_CONFIG` | Full Zenoh JSON5 configuration file; replaces default session configuration |
 

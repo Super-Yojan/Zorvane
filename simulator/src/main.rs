@@ -7,6 +7,7 @@ mod next_competition;
 mod occupancy_map;
 mod physics;
 mod rgb_camera;
+mod robotics_pose;
 mod session;
 mod target_search;
 mod terra;
@@ -16,6 +17,8 @@ mod velocity_controller;
 mod voxel_terrain;
 #[cfg(not(feature = "native"))]
 mod web_tiles;
+#[cfg(target_arch = "wasm32")]
+mod web_zenoh;
 mod world;
 #[cfg(feature = "native")]
 mod zenoh_bridge;
@@ -121,6 +124,10 @@ fn main() {
     if session::interactive_menu() {
         app.add_plugins(menu::MenuPlugin);
     }
+    // The Rust Zenoh crate does not compile to wasm. The browser page publishes
+    // pose through zenoh-ts over the router's remote-api WebSocket.
+    #[cfg(target_arch = "wasm32")]
+    app.add_plugins(web_zenoh::WebZenohPlugin);
     if std::env::var("ZORVANE_SMOKE").as_deref() == Ok("1") {
         app.add_systems(Update, smoke_exit);
     }

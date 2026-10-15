@@ -1,0 +1,7 @@
+services:
+  zenoh:
+    build: .
+    image: zorvane-zenoh:1.10.1
+    ports:
+      - "7447:7447"
+      - "10000:10000"

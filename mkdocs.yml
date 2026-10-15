@@ -81,6 +81,7 @@ validation:
 nav:
   - Overview: index.md
   - Running: running.md
+  - Step 2: step-2.md
   - Worlds:
       - Which world: worlds.md
       - Town and tiles: reference/world.md

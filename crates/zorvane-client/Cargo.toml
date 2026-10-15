@@ -1,0 +1,10 @@
+[package]
+name = "zorvane-client"
+version.workspace = true
+edition.workspace = true
+description = "Subscribe to one Zorvane rover pose over Zenoh"
+publish = false
+
+[dependencies]
+zenoh = { version = "1.10.1", default-features = false, features = ["transport_tcp"] }
+serde_json = "1.0.151"

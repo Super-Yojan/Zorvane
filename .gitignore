@@ -5,6 +5,7 @@ docs/reference/
 __pycache__/
 *.pyc
 simulator/.cache/
+router/.cache/
 simulator/runs/
 .DS_Store
 *.swp

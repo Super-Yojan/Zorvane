@@ -10658,8 +10658,17 @@ dependencies = [
  "terra-transport",
  "terra-types",
  "terra-waypoint",
+ "wasm-bindgen",
  "zenoh",
  "zorvane-vehicle",
+]
+
+[[package]]
+name = "zorvane-client"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "zenoh",
 ]
 
 [[package]]
