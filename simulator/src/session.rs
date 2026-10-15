@@ -51,9 +51,6 @@ pub struct SimSession {
     /// Bumped when the menu layout should be rebuilt.
     pub ui_epoch: u32,
     pub note: String,
-    /// Browser remote-api address. Native clients use TCP and ignore this.
-    pub router: String,
-    pub router_focused: bool,
 }
 
 impl SimSession {
@@ -64,11 +61,6 @@ impl SimSession {
             phase: Phase::Menu,
             ui_epoch: 1,
             note: String::new(),
-            router: std::env::var("ZORVANE_ZENOH_URL")
-                .ok()
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| "ws://localhost:10000".into()),
-            router_focused: false,
         }
     }
 

@@ -101,8 +101,7 @@ GPU tests are `#[ignore]`. They write `/tmp/terra-world-preview.png`.
 | `TERRA_ROVER_COUNT` | `1` | Fleet size, 0 through 32. |
 | `TERRA_ZENOH` | on | `0` disables the bridge. |
 | `TERRA_ZENOH_PREFIX` | `terra/rover` | Topic prefix. |
-| `TERRA_ZENOH_LISTEN` | `tcp/127.0.0.1:7447` | Peer listen endpoint. Unused when connect is set. |
-| `TERRA_ZENOH_CONNECT` | unset | Join this router as a client, for example `tcp/127.0.0.1:7447`. |
+| `TERRA_ZENOH_LISTEN` | `tcp/127.0.0.1:7447` | Peer listen endpoint. |
 | `TERRA_ZENOH_CONFIG` | unset | JSON5 file. Replaces the session config. |
 | `TERRA_RUN_DIR` | `runs` | Autonomy JSONL directory. |
 | `TERRA_TRIAL_DESIGN` | `adaptive` | Stored in the run manifest. |
@@ -110,7 +109,7 @@ GPU tests are `#[ignore]`. They write `/tmp/terra-world-preview.png`.
 | `TERRA_ZENOH_TEST_PYTHON` | unset | Interpreter for the ignored round-trip test. |
 | `TERRA_TEST_ZENOH_ENDPOINT` | unset | Enables the live Python socket test. |
 
-The same window runs in a browser after a merge to `main` publishes it: <https://super-yojan.dev/Zorvane/play/>. That build has no voxel hills. It publishes pose through the Zenoh router field in the menu (WebSocket only). The elevation view uses the bundled Terrarium PNG. `rover.glb` is about 118 MB, so the mesh appears after that download. [Step 2](step-2.md) is the short path for printing that pose.
+The same window runs in a browser after a merge to `main` publishes it: <https://super-yojan.dev/Zorvane/play/>. That build has no Zenoh and no voxel hills. The elevation view uses the bundled Terrarium PNG. `rover.glb` is about 118 MB, so the mesh appears after that download. [Step 2](step-2.md) prints pose from the native simulator.
 
 ```sh
 rustup target add wasm32-unknown-unknown

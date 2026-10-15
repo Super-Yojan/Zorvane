@@ -10658,7 +10658,6 @@ dependencies = [
  "terra-transport",
  "terra-types",
  "terra-waypoint",
- "wasm-bindgen",
  "zenoh",
  "zorvane-vehicle",
 ]

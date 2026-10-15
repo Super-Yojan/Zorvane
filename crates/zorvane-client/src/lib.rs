@@ -1,15 +1,13 @@
-//! Subscribe to `terra/rover/<id>/pose` from Python's Rust counterpart.
+//! Subscribe to `terra/rover/<id>/pose`.
 //!
 //! `heading` and `yaw` in the JSON body are the same angle in radians.
 
-use std::net::{SocketAddr, TcpStream};
 use std::sync::Mutex;
-use std::time::Duration;
 
 use zenoh::Wait;
 use zenoh::pubsub::Subscriber;
 
-const DEFAULT_ENDPOINT: &str = "tcp/127.0.0.1:7447";
+const ENDPOINT: &str = "tcp/127.0.0.1:7447";
 const PREFIX: &str = "terra/rover";
 
 /// Rover position in the robotics frame. `x` is −Bevy Z and `y` is −Bevy X.
@@ -40,26 +38,16 @@ impl std::error::Error for ClientError {}
 
 pub type Result<T> = std::result::Result<T, ClientError>;
 
-type PoseSubscriber = Subscriber<()>;
-
-/// A Zenoh session plus the pose subscribers created from it.
+/// A Zenoh session joined to the simulator, plus pose subscribers.
 pub struct Client {
-    subscribers: Mutex<Vec<PoseSubscriber>>,
+    subscribers: Mutex<Vec<Subscriber<()>>>,
     session: zenoh::Session,
 }
 
 impl Client {
-    /// Join `router`, or the simulator when it is already listening.
-    ///
-    /// `None` probes `tcp/127.0.0.1:7447`. An open port is a client connection
-    /// (the simulator's peer, or the student router). A closed port makes this
-    /// process listen there so a simulator started with
-    /// `TERRA_ZENOH_CONNECT=tcp/127.0.0.1:7447` can join it.
-    ///
-    /// An explicit router is always a client connect. `ws://` is rejected:
-    /// native clients use TCP, and the browser menu uses the WebSocket form.
-    pub fn connect(router: Option<&str>) -> Result<Self> {
-        connect_endpoint(router, DEFAULT_ENDPOINT)
+    /// Join the simulator. It already listens on `tcp/127.0.0.1:7447`.
+    pub fn connect() -> Result<Self> {
+        connect_to(ENDPOINT)
     }
 
     /// Invoke `callback` for each sample on `terra/rover/<id>/pose`.
@@ -99,65 +87,12 @@ pub fn parse_pose(payload: &[u8]) -> Option<Pose> {
     Some(Pose { x, y, heading })
 }
 
-fn connect_endpoint(router: Option<&str>, fallback: &str) -> Result<Client> {
-    let (mode, key, endpoint) = if let Some(router) = router {
-        reject_websocket(router)?;
-        if !router.starts_with("tcp/") {
-            return Err(ClientError(
-                "router must look like tcp/127.0.0.1:7447. ws:// is only for the browser simulator."
-                    .into(),
-            ));
-        }
-        ("client", "connect/endpoints", router)
-    } else if tcp_open(fallback)? {
-        ("client", "connect/endpoints", fallback)
-    } else {
-        ("peer", "listen/endpoints", fallback)
-    };
-    let session = open_session(mode, key, endpoint)?;
+fn connect_to(endpoint: &str) -> Result<Client> {
+    let session = open_session("client", "connect/endpoints", endpoint)?;
     Ok(Client {
         subscribers: Mutex::new(Vec::new()),
         session,
     })
-}
-
-fn reject_websocket(router: &str) -> Result<()> {
-    if router.starts_with("ws://")
-        || router.starts_with("wss://")
-        || router.starts_with("ws/")
-        || router.starts_with("wss/")
-    {
-        return Err(ClientError(
-            "Rust uses a TCP router such as tcp/127.0.0.1:7447. ws:// is only for the browser simulator."
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
-fn split_tcp(endpoint: &str) -> Result<(&str, u16)> {
-    let Some(hostport) = endpoint.strip_prefix("tcp/") else {
-        return Err(ClientError(format!(
-            "expected tcp/host:port, got {endpoint}"
-        )));
-    };
-    let Some((host, port)) = hostport.rsplit_once(':') else {
-        return Err(ClientError(format!(
-            "expected tcp/host:port, got {endpoint}"
-        )));
-    };
-    let port = port
-        .parse()
-        .map_err(|_| ClientError(format!("expected tcp/host:port, got {endpoint}")))?;
-    Ok((host, port))
-}
-
-fn tcp_open(endpoint: &str) -> Result<bool> {
-    let (host, port) = split_tcp(endpoint)?;
-    let address: SocketAddr = format!("{host}:{port}")
-        .parse()
-        .map_err(|_| ClientError(format!("expected tcp/host:port, got {endpoint}")))?;
-    Ok(TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok())
 }
 
 fn open_session(mode: &str, key: &str, endpoint: &str) -> Result<zenoh::Session> {
@@ -165,9 +100,8 @@ fn open_session(mode: &str, key: &str, endpoint: &str) -> Result<zenoh::Session>
     config
         .insert_json5("mode", &format!("\"{mode}\""))
         .map_err(|error| ClientError(error.to_string()))?;
-    let endpoints = serde_json::json!([endpoint]).to_string();
     config
-        .insert_json5(key, &endpoints)
+        .insert_json5(key, &serde_json::json!([endpoint]).to_string())
         .map_err(|error| ClientError(error.to_string()))?;
     config
         .insert_json5("scouting/multicast/enabled", "false")
@@ -199,35 +133,22 @@ mod tests {
     }
 
     #[test]
-    fn websocket_urls_are_rejected() {
-        let Err(error) = Client::connect(Some("ws://localhost:10000")) else {
-            panic!("websocket router was accepted");
-        };
-        let message = error.to_string();
-        assert!(message.contains("TCP"), "{message}");
-    }
-
-    #[test]
-    fn peer_listener_delivers_a_pose_to_the_subscriber() {
+    fn subscriber_receives_a_pose() {
         let endpoint = "tcp/127.0.0.1:17447";
-        let listener = connect_endpoint(None, endpoint).unwrap();
+        let peer = open_session("peer", "listen/endpoints", endpoint).unwrap();
+        let client = connect_to(endpoint).unwrap();
         let (sender, receiver) = mpsc::channel();
-        listener
+        client
             .subscribe_pose(0, move |pose| {
                 let _ = sender.send(pose);
             })
             .unwrap();
-        let publisher = connect_endpoint(Some(endpoint), endpoint).unwrap();
-        publisher
-            .session
-            .put(
-                "terra/rover/0/pose",
-                r#"{"x":3.0,"y":4.0,"yaw":0.5,"heading":0.5}"#,
-            )
-            .wait()
-            .unwrap();
-        let pose = receiver
-            .recv_timeout(Duration::from_secs(3))
+        let payload = r#"{"x":3.0,"y":4.0,"yaw":0.5,"heading":0.5}"#;
+        let pose = (0..20)
+            .find_map(|_| {
+                peer.put("terra/rover/0/pose", payload).wait().unwrap();
+                receiver.recv_timeout(Duration::from_millis(200)).ok()
+            })
             .expect("pose sample");
         assert_eq!(pose.x, 3.0);
         assert_eq!(pose.y, 4.0);

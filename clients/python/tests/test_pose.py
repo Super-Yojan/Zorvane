@@ -1,6 +1,6 @@
 import unittest
 
-from zorvane import Pose, RouterError, connect
+from zorvane import Pose
 from zorvane.client import parse_pose
 
 
@@ -16,10 +16,6 @@ class PoseTests(unittest.TestCase):
     def test_yaw_fills_in_when_heading_is_absent(self):
         pose = parse_pose(b'{"x":0,"y":1,"yaw":1.2}')
         self.assertEqual(pose.heading, 1.2)
-
-    def test_websocket_router_is_rejected(self):
-        with self.assertRaises(RouterError):
-            connect("ws://localhost:10000")
 
 
 if __name__ == "__main__":

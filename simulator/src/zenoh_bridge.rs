@@ -25,8 +25,6 @@ pub struct ZenohBridgeConfig {
     pub enabled: bool,
     pub prefix: String,
     pub listen: String,
-    /// When set, join this router instead of listening. Example: `tcp/127.0.0.1:7447`.
-    pub connect: Option<String>,
     pub config_file: Option<String>,
     pub frame_rate: f32,
     pub command_timeout: Duration,
@@ -37,7 +35,6 @@ impl Default for ZenohBridgeConfig {
             enabled: true,
             prefix: "terra/rover".into(),
             listen: "tcp/127.0.0.1:7447".into(),
-            connect: None,
             config_file: None,
             frame_rate: 10.0,
             command_timeout: Duration::from_millis(500),
@@ -51,9 +48,6 @@ impl ZenohBridgeConfig {
             prefix: std::env::var("TERRA_ZENOH_PREFIX").unwrap_or_else(|_| "terra/rover".into()),
             listen: std::env::var("TERRA_ZENOH_LISTEN")
                 .unwrap_or_else(|_| "tcp/127.0.0.1:7447".into()),
-            connect: std::env::var("TERRA_ZENOH_CONNECT")
-                .ok()
-                .filter(|value| !value.is_empty()),
             config_file: std::env::var("TERRA_ZENOH_CONFIG").ok(),
             ..default()
         }
@@ -77,19 +71,11 @@ impl ZenohBridgeConfig {
             return zenoh::Config::from_file(path);
         }
         let mut config = zenoh::Config::default();
-        if let Some(connect) = &self.connect {
-            config.insert_json5("mode", "\"client\"")?;
-            config.insert_json5(
-                "connect/endpoints",
-                &serde_json::json!([connect]).to_string(),
-            )?;
-        } else {
-            config.insert_json5("mode", "\"peer\"")?;
-            config.insert_json5(
-                "listen/endpoints",
-                &serde_json::json!([self.listen]).to_string(),
-            )?;
-        }
+        config.insert_json5("mode", "\"peer\"")?;
+        config.insert_json5(
+            "listen/endpoints",
+            &serde_json::json!([self.listen]).to_string(),
+        )?;
         config.insert_json5("scouting/multicast/enabled", "false")?;
         Ok(config)
     }
@@ -800,18 +786,6 @@ fn publish_frames(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn connect_endpoint_selects_client_mode() {
-        let config = ZenohBridgeConfig {
-            connect: Some("tcp/127.0.0.1:7447".into()),
-            ..default()
-        };
-        let session = config.session_config().unwrap();
-        let mode = session.get_json("mode").unwrap();
-        assert!(mode.contains("client"), "{mode}");
-        let endpoints = session.get_json("connect/endpoints").unwrap();
-        assert!(endpoints.contains("tcp/127.0.0.1:7447"), "{endpoints}");
-    }
     #[test]
     fn latest_occupancy_payload_and_baseline_replace_together() {
         let mut outgoing = Outgoing::default();

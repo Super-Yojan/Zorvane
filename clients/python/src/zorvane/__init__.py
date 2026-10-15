@@ -1,5 +1,5 @@
 """Subscribe to a Zorvane rover pose."""
 
-from .client import Client, Pose, RouterError, connect
+from .client import Client, Pose, connect
 
-__all__ = ["Client", "Pose", "RouterError", "connect"]
+__all__ = ["Client", "Pose", "connect"]

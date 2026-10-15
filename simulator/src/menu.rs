@@ -1,8 +1,6 @@
 //! Start screen and pause menu. Escape or the corner button pauses a running world.
 
 use crate::session::{Phase, RebuildWorld, SimSession, WorldChoice, menu_rover_max};
-use bevy::input::ButtonState;
-use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 
 pub struct MenuPlugin;
@@ -11,15 +9,7 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_ui_camera).add_systems(
             Update,
-            (
-                toggle_pause,
-                sync_clock,
-                clicks,
-                edit_router,
-                rebuild_ui,
-                sync_ui_camera,
-            )
-                .chain(),
+            (toggle_pause, sync_clock, clicks, rebuild_ui, sync_ui_camera).chain(),
         );
     }
 }
@@ -42,10 +32,6 @@ struct LoadButton;
 struct PauseButton;
 #[derive(Component)]
 struct RoverStep(i32);
-#[derive(Component)]
-struct RouterField;
-#[derive(Component)]
-struct RouterLabel;
 
 fn spawn_ui_camera(mut commands: Commands) {
     commands.spawn((
@@ -94,7 +80,6 @@ fn clicks(
     load: Query<&Interaction, (Changed<Interaction>, With<LoadButton>)>,
     pause: Query<&Interaction, (Changed<Interaction>, With<PauseButton>)>,
     steps: Query<(&Interaction, &RoverStep), Changed<Interaction>>,
-    router_field: Query<&Interaction, (Changed<Interaction>, With<RouterField>)>,
 ) {
     let pressed = |interaction: &Interaction| *interaction == Interaction::Pressed;
     for (interaction, pick) in &worlds {
@@ -138,69 +123,6 @@ fn clicks(
     if pause.iter().any(pressed) && session.phase == Phase::Playing {
         session.phase = Phase::Paused;
         session.ui_epoch = session.ui_epoch.wrapping_add(1);
-    }
-    if router_field.iter().any(pressed) {
-        session.router_focused = true;
-    } else if start.iter().any(pressed)
-        || resume.iter().any(pressed)
-        || restart.iter().any(pressed)
-        || load.iter().any(pressed)
-        || worlds.iter().any(|(interaction, _)| pressed(interaction))
-        || steps.iter().any(|(interaction, _)| pressed(interaction))
-    {
-        session.router_focused = false;
-    }
-}
-
-fn edit_router(
-    mut session: ResMut<SimSession>,
-    mut keys: MessageReader<KeyboardInput>,
-    mut labels: Query<&mut Text, With<RouterLabel>>,
-) {
-    if labels.is_empty() {
-        return;
-    }
-    if session.router_focused {
-        let mut changed = false;
-        for event in keys.read() {
-            if event.state != ButtonState::Pressed {
-                continue;
-            }
-            match event.key_code {
-                KeyCode::Backspace => {
-                    session.router.pop();
-                    changed = true;
-                }
-                KeyCode::Enter | KeyCode::Escape | KeyCode::Tab => {
-                    session.router_focused = false;
-                }
-                _ => {
-                    if let Some(text) = &event.text {
-                        let piece = text.as_str();
-                        if !piece.is_empty()
-                            && piece.chars().all(|c| !c.is_control())
-                            && session.router.len() < 180
-                        {
-                            session.router.push_str(piece);
-                            changed = true;
-                        }
-                    }
-                }
-            }
-        }
-        if !changed && !session.is_changed() {
-            return;
-        }
-    }
-    let shown = if session.router_focused {
-        format!("{}_", session.router)
-    } else {
-        session.router.clone()
-    };
-    for mut text in &mut labels {
-        if text.as_str() != shown {
-            **text = shown.clone();
-        }
     }
 }
 
@@ -317,34 +239,6 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool) {
                             label(row, &format!("{}", session.rover_count), 22.0, Color::WHITE);
                             button(row, "+", RoverStep(1), false);
                         });
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        label(panel, "Zenoh router", 14.0, Color::srgb(0.62, 0.68, 0.70));
-                        panel
-                            .spawn((
-                                Button,
-                                RouterField,
-                                Node {
-                                    min_height: Val::Px(42.0),
-                                    padding: UiRect::all(Val::Px(10.0)),
-                                    align_items: AlignItems::Center,
-                                    border_radius: BorderRadius::all(Val::Px(8.0)),
-                                    ..default()
-                                },
-                                BackgroundColor(Color::srgb(0.10, 0.12, 0.14)),
-                            ))
-                            .with_children(|field| {
-                                field.spawn((
-                                    RouterLabel,
-                                    Text::new(session.router.clone()),
-                                    TextFont {
-                                        font_size: FontSize::Px(15.0),
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgb(0.85, 0.92, 0.90)),
-                                ));
-                            });
-                    }
                     if paused {
                         button(panel, "Resume", ResumeButton, true);
                         button(panel, "Restart", RestartButton, false);
