@@ -7,6 +7,7 @@ mod next_competition;
 mod occupancy_map;
 mod physics;
 mod rgb_camera;
+mod robotics_pose;
 mod session;
 mod target_search;
 mod terra;

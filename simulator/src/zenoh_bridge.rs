@@ -125,7 +125,8 @@ struct Outgoing {
     states: BTreeMap<(u64, String), Vec<u8>>,
     occupancy: BTreeMap<u64, OccupancyPublication>,
     occupancy_heartbeats: std::collections::BTreeSet<u64>,
-    reports:BTreeMap<u64,Vec<Vec<u8>>>,
+    reports: BTreeMap<u64, Vec<Vec<u8>>>,
+    poses: BTreeMap<u64, Vec<u8>>,
 }
 struct OccupancyPublication {
     payload: Vec<u8>,
@@ -139,12 +140,29 @@ struct OccupancyBaseline {
     sequence: u64,
 }
 impl Outgoing {
-    fn queue_occupancy(&mut self, id: u64, run_id: &str, sequence: u64, grid: &terra_mapping::MapSnapshot) {
+    fn queue_occupancy(
+        &mut self,
+        id: u64,
+        run_id: &str,
+        sequence: u64,
+        grid: &terra_mapping::MapSnapshot,
+    ) {
         self.occupancy_heartbeats.remove(&id);
-        self.occupancy.insert(id, OccupancyPublication {
-            payload: serde_json::to_vec(&terra_autonomy::occupancy_telemetry(id, run_id, sequence, grid)).unwrap(),
-            baseline: OccupancyBaseline { schema_version: 1, rover_id: id, run_id: run_id.into(), sequence },
-        });
+        self.occupancy.insert(
+            id,
+            OccupancyPublication {
+                payload: serde_json::to_vec(&terra_autonomy::occupancy_telemetry(
+                    id, run_id, sequence, grid,
+                ))
+                .unwrap(),
+                baseline: OccupancyBaseline {
+                    schema_version: 1,
+                    rover_id: id,
+                    run_id: run_id.into(),
+                    sequence,
+                },
+            },
+        );
     }
 }
 #[derive(Clone)]
@@ -326,7 +344,8 @@ fn drive_goals(
             tracked.seq = inbox.seq;
             let _ = tracked.follower.accept(&inbox.command, half);
         }
-        let (x, y, yaw) = robotics_pose(transform.translation, transform.rotation);
+        let (x, y, yaw) =
+            crate::robotics_pose::robotics_pose(transform.translation, transform.rotation);
         let output = tracked.follower.step(x, y, yaw);
         if output.status.state != GoalState::Idle {
             if paused || output.status.state != GoalState::Active {
@@ -364,15 +383,6 @@ fn drive_goals(
     }
     runtime.rovers.retain(|id, _| seen.contains(id));
 }
-/// Bevy pose to the robotics frame `terra-waypoint` steps: x = −Z, y = −X, yaw 0 faces −Z.
-fn robotics_pose(translation: Vec3, rotation: Quat) -> (f64, f64, f64) {
-    let forward = rotation * Vec3::NEG_Z;
-    (
-        f64::from(-translation.z),
-        f64::from(-translation.x),
-        f64::from((-forward.x).atan2(-forward.z)),
-    )
-}
 
 fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Result<()> {
     let session = zenoh::open(config.session_config()?).wait()?;
@@ -393,7 +403,14 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
             };
             if !matches!(
                 kind,
-                "autonomy" | "teleop" | "safety" | "goal/decision" | "mission/report" | "search" | "search/action" | "search/report/ack"
+                "autonomy"
+                    | "teleop"
+                    | "safety"
+                    | "goal/decision"
+                    | "mission/report"
+                    | "search"
+                    | "search/action"
+                    | "search/report/ack"
             ) {
                 return;
             }
@@ -475,7 +492,7 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
         .wait()?;
     shared.connected.store(true, Ordering::Release);
     info!(
-        "Terra Zenoh ready: {}/<id>/{{cmd_vel,goal}}, {}/<id>/goal/status, {}/<id>/camera/{{rgb,depth}} (depth includes exposure pose), {}/fleet/{{size,state}}",
+        "Terra Zenoh ready: {}/<id>/{{cmd_vel,goal,pose}}, {}/<id>/goal/status, {}/<id>/camera/{{rgb,depth}} (depth includes exposure pose), {}/fleet/{{size,state}}",
         config.prefix, config.prefix, config.prefix, config.prefix
     );
     let mut occupancy_baselines = BTreeMap::<u64, OccupancyBaseline>::new();
@@ -511,25 +528,56 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
         }
         for (id, publication) in outgoing.occupancy {
             if live.contains(&id) {
-                session.put(format!("{}/{id}/map/occupancy", config.prefix), publication.payload)
-                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON).wait()?;
+                session
+                    .put(
+                        format!("{}/{id}/map/occupancy", config.prefix),
+                        publication.payload,
+                    )
+                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                    .wait()?;
                 // Commit only after the paired full payload was published.
                 occupancy_baselines.insert(id, publication.baseline);
             }
         }
         for id in outgoing.occupancy_heartbeats {
-            if live.contains(&id) && let Some(baseline) = occupancy_baselines.get(&id) {
-                session.put(format!("{}/{id}/map/occupancy/heartbeat", config.prefix), serde_json::to_vec(baseline).unwrap())
-                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON).wait()?;
+            if live.contains(&id)
+                && let Some(baseline) = occupancy_baselines.get(&id)
+            {
+                session
+                    .put(
+                        format!("{}/{id}/map/occupancy/heartbeat", config.prefix),
+                        serde_json::to_vec(baseline).unwrap(),
+                    )
+                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                    .wait()?;
             }
         }
-        for (id,reports) in outgoing.reports {if live.contains(&id){for report in reports {session.put(format!("{}/{id}/search/report",config.prefix),report).encoding(zenoh::bytes::Encoding::APPLICATION_JSON).wait()?;}}}
+        for (id, reports) in outgoing.reports {
+            if live.contains(&id) {
+                for report in reports {
+                    session
+                        .put(format!("{}/{id}/search/report", config.prefix), report)
+                        .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                        .wait()?;
+                }
+            }
+        }
         for (id, payload) in outgoing.goals {
             if !live.contains(&id) {
                 continue;
             }
             session
                 .put(format!("{}/{id}/goal/status", config.prefix), payload)
+                .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                .congestion_control(zenoh::qos::CongestionControl::Drop)
+                .wait()?;
+        }
+        for (id, payload) in outgoing.poses {
+            if !live.contains(&id) {
+                continue;
+            }
+            session
+                .put(format!("{}/{id}/pose", config.prefix), payload)
                 .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
                 .congestion_control(zenoh::qos::CongestionControl::Drop)
                 .wait()?;
@@ -648,7 +696,7 @@ fn publish_frames(
     config: Res<ZenohBridgeConfig>,
     depth: Query<(&RoverId, &DepthCamera, &DepthFrame)>,
     rgb: Query<(&RoverId, &RgbFrame, &crate::rgb_camera::RgbCamera)>,
-    rovers: Query<&RoverId, With<Rover>>,
+    rovers: Query<(&RoverId, &Transform), With<Rover>>,
     mut state: Local<PublishState>,
 ) {
     let now = Instant::now();
@@ -660,7 +708,7 @@ fn publish_frames(
         return;
     }
     state.last_publish = Some(now);
-    let mut ids: Vec<_> = rovers.iter().map(|id| id.0).collect();
+    let mut ids: Vec<_> = rovers.iter().map(|(id, _)| id.0).collect();
     ids.sort();
     state
         .sequences
@@ -682,6 +730,13 @@ fn publish_frames(
         );
         state.fleet_ids = ids.clone();
         state.last_fleet_publish = Some(now);
+    }
+    for (id, transform) in &rovers {
+        let (x, y, yaw) =
+            crate::robotics_pose::robotics_pose(transform.translation, transform.rotation);
+        outgoing
+            .poses
+            .insert(id.0, crate::robotics_pose::pose_payload(x, y, yaw));
     }
     for (id, camera, frame) in &depth {
         if ids.binary_search(&id.0).is_err() {
@@ -735,7 +790,11 @@ mod tests {
     fn latest_occupancy_payload_and_baseline_replace_together() {
         let mut outgoing = Outgoing::default();
         let grid = terra_mapping::MapSnapshot {
-            width: 1, height: 1, resolution: 0.1, origin_x: 0.0, origin_y: 0.0,
+            width: 1,
+            height: 1,
+            resolution: 0.1,
+            origin_x: 0.0,
+            origin_y: 0.0,
             occupancy: vec![100],
         };
         outgoing.queue_occupancy(1, "old", 7, &grid);
@@ -1500,7 +1559,8 @@ fn drive_autonomy(
     let mut seen = std::collections::BTreeSet::new();
     for (entity, id, transform, mut command, map, velocity, angular, gate, control) in &mut rovers {
         seen.insert(id.0);
-        let (x, y, yaw) = robotics_pose(transform.translation, transform.rotation);
+        let (x, y, yaw) =
+            crate::robotics_pose::robotics_pose(transform.translation, transform.rotation);
         let pose = Pose { x, y, yaw };
         let forward = transform.rotation * Vec3::NEG_Z;
         let measured = Twist {
@@ -1530,8 +1590,14 @@ fn drive_autonomy(
                 detector_frame: None,
             }
         });
-        let detector_enabled=std::env::var("TERRA_MISSION").as_deref()==Ok("1");
-        if detector_enabled&&map_time.is_some_and(|t|now-t<0.5){let _=tracked.arbiter.set_detector_capability(vec!["survivor".into()],"sim-survivor-v1".into(),now);}
+        let detector_enabled = std::env::var("TERRA_MISSION").as_deref() == Ok("1");
+        if detector_enabled && map_time.is_some_and(|t| now - t < 0.5) {
+            let _ = tracked.arbiter.set_detector_capability(
+                vec!["survivor".into()],
+                "sim-survivor-v1".into(),
+                now,
+            );
+        }
         if let Some(p) = patch.as_ref() {
             tracked
                 .arbiter
@@ -1594,10 +1660,31 @@ fn drive_autonomy(
                         }
                     }
                     "search" | "search/action" => {
-                        let input=ArbiterInput{now,pose,pose_time:now,map:snapshot.as_ref(),map_time,map_revision:map.map(|m|m.last_sequence).unwrap_or(0),measured,healthy};
-                        if received.elapsed().as_secs_f64()<0.5 {if kind=="search"{if let Some(r)=decode_search_request(&bytes){let _=tracked.arbiter.start_search(r,&input);}}else if let Some(r)=decode_search_action(&bytes){let _=tracked.arbiter.apply_search_action(r,&input);}}
+                        let input = ArbiterInput {
+                            now,
+                            pose,
+                            pose_time: now,
+                            map: snapshot.as_ref(),
+                            map_time,
+                            map_revision: map.map(|m| m.last_sequence).unwrap_or(0),
+                            measured,
+                            healthy,
+                        };
+                        if received.elapsed().as_secs_f64() < 0.5 {
+                            if kind == "search" {
+                                if let Some(r) = decode_search_request(&bytes) {
+                                    let _ = tracked.arbiter.start_search(r, &input);
+                                }
+                            } else if let Some(r) = decode_search_action(&bytes) {
+                                let _ = tracked.arbiter.apply_search_action(r, &input);
+                            }
+                        }
                     }
-                    "search/report/ack" => {if let Some(r)=decode_search_report_ack(&bytes){tracked.arbiter.ack_search_report(r);}}
+                    "search/report/ack" => {
+                        if let Some(r) = decode_search_report_ack(&bytes) {
+                            tracked.arbiter.ack_search_report(r);
+                        }
+                    }
                     "mission/report" => {
                         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                             if let Some(target) = v["survivor_id"].as_u64() {
@@ -1618,9 +1705,24 @@ fn drive_autonomy(
                 tracked.arbiter.accept_goal(&g.command, half);
             }
         }
-        if detector_enabled && let (Some(grid),Some(search))=(snapshot.as_ref(),tracked.arbiter.search_status(now)) {
-            let frame=map.map(|m|m.last_sequence).unwrap_or(0);
-            if tracked.detector_frame!=Some(frame){tracked.detector_frame=Some(frame);if let Some(observation)=crate::target_search::observation(grid,pose,runtime.mission.candidates(),&search,frame,now){let _=tracked.arbiter.accept_target_observation(observation,now);}}
+        if detector_enabled
+            && let (Some(grid), Some(search)) =
+                (snapshot.as_ref(), tracked.arbiter.search_status(now))
+        {
+            let frame = map.map(|m| m.last_sequence).unwrap_or(0);
+            if tracked.detector_frame != Some(frame) {
+                tracked.detector_frame = Some(frame);
+                if let Some(observation) = crate::target_search::observation(
+                    grid,
+                    pose,
+                    runtime.mission.candidates(),
+                    &search,
+                    frame,
+                    now,
+                ) {
+                    let _ = tracked.arbiter.accept_target_observation(observation, now);
+                }
+            }
         }
         let mut output = tracked.arbiter.step(ArbiterInput {
             now,
@@ -1711,18 +1813,30 @@ fn drive_autonomy(
                 .unwrap()
                 .as_secs_f64();
             let mut outgoing = bridge.shared.outgoing.lock().unwrap();
-            outgoing.reports.insert(id.0,output.pending_reports.iter().map(|r|serde_json::to_vec(r).unwrap()).collect());
+            outgoing.reports.insert(
+                id.0,
+                output
+                    .pending_reports
+                    .iter()
+                    .map(|r| serde_json::to_vec(r).unwrap())
+                    .collect(),
+            );
             outgoing
                 .goals
                 .insert(id.0, encode_status(&output.goal).unwrap());
             for (kind, value) in [
-                ("hardware/status", serde_json::json!({"version":1,"run_id":runtime.run_id,"ready":true,"armed":true,"arming":false,"simulated":true,"reason":"Simulated actuation ready"})),
+                (
+                    "hardware/status",
+                    serde_json::json!({"version":1,"run_id":runtime.run_id,"ready":true,"armed":true,"arming":false,"simulated":true,"reason":"Simulated actuation ready"}),
+                ),
                 (
                     "autonomy/status",
                     serde_json::to_value(&output.status).unwrap(),
                 ),
-                ("search/status",serde_json::to_value(&output.search).unwrap()),
-
+                (
+                    "search/status",
+                    serde_json::to_value(&output.search).unwrap(),
+                ),
                 (
                     "goal/proposal",
                     serde_json::to_value(&output.proposal).unwrap(),
@@ -1745,17 +1859,28 @@ fn drive_autonomy(
             let run_id = runtime.run_id.clone();
             let sequence = map.map(|m| m.last_sequence).unwrap_or(0);
             let publication = runtime.occupancy_gates.entry(id.0).or_default().observe(
-                &run_id, grid, sequence, map_time.is_some_and(|t| now - t < 0.5),
+                &run_id,
+                grid,
+                sequence,
+                map_time.is_some_and(|t| now - t < 0.5),
                 Duration::from_secs_f64(now),
-                |a, b| a.width == b.width && a.height == b.height && a.resolution == b.resolution
-                    && a.origin_x == b.origin_x && a.origin_y == b.origin_y && a.occupancy == b.occupancy,
+                |a, b| {
+                    a.width == b.width
+                        && a.height == b.height
+                        && a.resolution == b.resolution
+                        && a.origin_x == b.origin_x
+                        && a.origin_y == b.origin_y
+                        && a.occupancy == b.occupancy
+                },
             );
             let mut outgoing = bridge.shared.outgoing.lock().unwrap();
             match publication {
                 publish_gate::Publication::Full => {
                     outgoing.queue_occupancy(id.0, &run_id, sequence, grid);
                 }
-                publish_gate::Publication::Heartbeat => { outgoing.occupancy_heartbeats.insert(id.0); }
+                publish_gate::Publication::Heartbeat => {
+                    outgoing.occupancy_heartbeats.insert(id.0);
+                }
                 publish_gate::Publication::None => {}
             }
         }
@@ -1827,13 +1952,13 @@ mod autonomy_integration_tests {
             shared.outgoing.lock().unwrap().states[&(1, "autonomy/status".into())].clone();
         let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
         assert_eq!(value["safety"], "emergency_stop");
-        let payload = shared.outgoing.lock().unwrap().states[&(1, "hardware/status".into())].clone();
+        let payload =
+            shared.outgoing.lock().unwrap().states[&(1, "hardware/status".into())].clone();
         let capability: serde_json::Value = serde_json::from_slice(&payload).unwrap();
         assert_eq!(capability["simulated"], true);
         assert_eq!(capability["ready"], true);
         assert_eq!(capability["armed"], true);
         // Virtual readiness cannot release the arbiter's emergency-stop latch.
         assert!(q.iter(app.world()).all(|(_, c)| c.linear == 0.));
-
     }
 }

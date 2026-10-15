@@ -108,6 +108,7 @@ rover. The per-rover keys are:
 | Key | Payload |
 | --- | --- |
 | `terra/rover/<id>/cmd_vel` | JSON `{"linear":1.0,"angular":0.3}` (debug twist) |
+| `terra/rover/<id>/pose` | JSON `{"x":1.0,"y":2.0,"yaw":0.3,"heading":0.3}` about 10 Hz |
 | `terra/rover/<id>/goal` | JSON go-to-waypoint, published once and latched |
 | `terra/rover/<id>/goal/status` | JSON progress for the latched goal |
 | `terra/rover/<id>/camera/rgb` | Frame packet, `RGBA8_SRGB` |
@@ -267,6 +268,12 @@ fleet size.
 
 The default Zenoh peer listens on `tcp/127.0.0.1:7447`, without multicast discovery.
 The supplied client connects directly; no separate router is required.
+Printing `terra/rover/<id>/pose` is [Step 2](../docs/step-2.md).
+
+`terra/rover/<id>/pose` is the rover's own position, published about ten times a
+second while the bridge is connected. `x` is −Bevy Z, `y` is −Bevy X, and yaw 0
+faces Bevy −Z (robotics +x). `heading` is the same number as `yaw`, in radians.
+`goal/status` still reports the goal, not this pose.
 
 | Environment variable | Purpose |
 | --- | --- |

@@ -10663,6 +10663,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zorvane-client"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "zenoh",
+]
+
+[[package]]
 name = "zorvane-vehicle"
 version = "0.1.0"
 
