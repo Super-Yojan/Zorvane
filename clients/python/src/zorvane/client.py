@@ -1,13 +1,11 @@
-"""Join the simulator's Zenoh session and subscribe to pose."""
+"""Subscribe to a Zorvane rover and drive it through the browser simulator."""
 
 from __future__ import annotations
 
 import json
+import sys
 
-import zenoh
-
-ENDPOINT = "tcp/127.0.0.1:7447"
-PREFIX = "terra/rover"
+from .browser import BrowserHost, BrowserHostConfig
 
 
 class Pose:
@@ -33,34 +31,46 @@ def parse_pose(payload: bytes) -> Pose:
 
 
 class Client:
-    def __init__(self, session: zenoh.Session) -> None:
-        self._session = session
-        self._subscribers: list[zenoh.Subscriber] = []
+    def __init__(self, backend) -> None:
+        self._backend = backend
+
+    @classmethod
+    def host_browser(cls, config: BrowserHostConfig | None = None) -> Client:
+        """Start the embedded gateway. Open `pairing_url` in a browser on this computer."""
+        return cls(BrowserHost(config or BrowserHostConfig()))
+
+    @property
+    def pairing_url(self) -> str | None:
+        return getattr(self._backend, "pairing_url", None)
 
     def subscribe_pose(self, rover_id: int, callback) -> None:
         """Call `callback(pose)` for each sample on `terra/rover/<id>/pose`."""
-        key = f"{PREFIX}/{int(rover_id)}/pose"
+        self._backend.subscribe_pose(rover_id, callback)
 
-        def handler(sample) -> None:
-            try:
-                pose = parse_pose(sample.payload.to_bytes())
-            except (KeyError, TypeError, ValueError):
-                return
-            callback(pose)
+    def set_velocity(self, rover_id: int, linear: float, angular: float) -> None:
+        """Publish one velocity sample. Repeat it faster than every 500 ms to keep moving."""
+        self._backend.set_velocity(rover_id, linear, angular)
 
-        self._subscribers.append(self._session.declare_subscriber(key, handler))
+    def wait_connected(self, timeout: float) -> None:
+        self._backend.wait_connected(timeout)
 
     def close(self) -> None:
-        for subscriber in self._subscribers:
-            subscriber.undeclare()
-        self._subscribers.clear()
-        self._session.close()
+        self._backend.close()
 
 
 def connect() -> Client:
-    """Join the simulator. It already listens on `tcp/127.0.0.1:7447`."""
-    config = zenoh.Config()
-    config.insert_json5("mode", '"client"')
-    config.insert_json5("connect/endpoints", json.dumps([ENDPOINT]))
-    config.insert_json5("scouting/multicast/enabled", "false")
-    return Client(zenoh.open(config))
+    """Host the browser simulator and print the pairing URL."""
+    client = Client.host_browser()
+    print(
+        "Open this pairing URL, then select a world and press Start:\n"
+        f"{client.pairing_url}",
+        file=sys.stderr,
+    )
+    return client
+
+
+def connect_native(endpoint: str = "tcp/127.0.0.1:7447") -> Client:
+    """Join a native Zenoh simulator. Students use `connect()` instead."""
+    from .native import NativeClient
+
+    return Client(NativeClient.connect(endpoint))

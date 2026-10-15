@@ -1,8 +1,10 @@
 //! Print `x y heading` for rover 0.
 //!
 //! ```sh
-//! cargo run -p zorvane-client --example print_pose -- --seconds 10
+//! cargo run -p zorvane-client --example print_pose
 //! ```
+//!
+//! Open the printed pairing URL. `--native` joins a Zenoh simulator instead.
 
 use std::env;
 use std::time::Duration;
@@ -12,12 +14,13 @@ use zorvane_client::{BrowserHostConfig, Client};
 fn main() {
     let mut rover = 0u64;
     let mut seconds: Option<f64> = None;
-    let mut browser = false;
+    let mut browser = true;
     let mut play_url = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--browser" => browser = true,
+            "--native" => browser = false,
             "--play-url" => play_url = Some(args.next().expect("--play-url needs a URL")),
             "--rover" => {
                 rover = args

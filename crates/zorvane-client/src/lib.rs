@@ -7,6 +7,7 @@ use std::time::Duration;
 
 mod browser;
 mod camera;
+mod page;
 pub use browser::{BrowserHostConfig, ConnectionState};
 pub use camera::{CameraFrame, CameraHeader, decode_camera_frame};
 pub use zorvane_browser_protocol::Publication;

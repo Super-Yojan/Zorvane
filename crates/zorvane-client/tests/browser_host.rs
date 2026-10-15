@@ -10,9 +10,10 @@ fn socket(client: &Client, token: Option<&str>) -> tungstenite::WebSocket<std::n
             .into_owned()
             .collect();
     let mut request = fields["endpoint"].as_str().into_client_request().unwrap();
-    request
-        .headers_mut()
-        .insert("Origin", "https://super-yojan.dev".parse().unwrap());
+    request.headers_mut().insert(
+        "Origin",
+        pairing.origin().ascii_serialization().parse().unwrap(),
+    );
     let address = url::Url::parse(&fields["endpoint"]).unwrap();
     let stream =
         std::net::TcpStream::connect((address.host_str().unwrap(), address.port().unwrap()))
@@ -289,9 +290,10 @@ fn protocol_version_mismatch_and_competing_tabs_are_rejected() {
             .into_owned()
             .collect();
     let mut request = fields["endpoint"].as_str().into_client_request().unwrap();
-    request
-        .headers_mut()
-        .insert("Origin", "https://super-yojan.dev".parse().unwrap());
+    request.headers_mut().insert(
+        "Origin",
+        pairing.origin().ascii_serialization().parse().unwrap(),
+    );
     let address = url::Url::parse(&fields["endpoint"]).unwrap();
     let stream =
         std::net::TcpStream::connect((address.host_str().unwrap(), address.port().unwrap()))
@@ -347,4 +349,117 @@ fn unauthenticated_slow_peer_cannot_block_host_shutdown() {
         "shutdown waited on an unauthenticated peer"
     );
     drip.join().unwrap();
+}
+
+#[test]
+fn pairing_url_is_the_loopback_page_not_the_public_site() {
+    let client = Client::host_browser(BrowserHostConfig::default()).unwrap();
+    let pairing = url::Url::parse(&client.pairing_url().unwrap()).unwrap();
+    assert_eq!(pairing.scheme(), "http");
+    assert_eq!(pairing.host_str(), Some("127.0.0.1"));
+    assert_eq!(pairing.path(), "/Zorvane/play/webgpu/");
+    let endpoint = url::form_urlencoded::parse(pairing.fragment().unwrap().as_bytes())
+        .find(|(key, _)| key == "endpoint")
+        .unwrap()
+        .1;
+    assert!(endpoint.starts_with(&format!(
+        "ws://127.0.0.1:{}/bridge",
+        pairing.port().unwrap()
+    )));
+}
+
+#[test]
+fn gateway_serves_the_simulator_page_and_rejects_path_escape() {
+    let fixture = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    fixture.set_nonblocking(true).unwrap();
+    let fixture_addr = fixture.local_addr().unwrap();
+    let fixture_thread = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while std::time::Instant::now() < deadline {
+            match fixture.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut request = [0u8; 2048];
+                    let count = std::io::Read::read(&mut stream, &mut request).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&request[..count]);
+                    let body = if request.contains("index.html")
+                        || request.starts_with("GET /Zorvane/play/webgpu/ HTTP")
+                    {
+                        b"page-ok".to_vec()
+                    } else if request.contains("app.js") {
+                        b"script-ok".to_vec()
+                    } else {
+                        b"nope".to_vec()
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = std::io::Write::write_all(&mut stream, response.as_bytes());
+                    let _ = std::io::Write::write_all(&mut stream, &body);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    let client = Client::host_browser(BrowserHostConfig {
+        play_url: format!("http://{fixture_addr}/Zorvane/play/webgpu/"),
+        force_proxy: true,
+        ..BrowserHostConfig::default()
+    })
+    .unwrap();
+    let pairing = url::Url::parse(&client.pairing_url().unwrap()).unwrap();
+    assert_eq!(pairing.scheme(), "http");
+    assert_ne!(pairing.port().unwrap(), fixture_addr.port());
+    let page = http_get(&format!(
+        "http://127.0.0.1:{}{}",
+        pairing.port().unwrap(),
+        pairing.path()
+    ));
+    assert!(page.contains("page-ok"), "{page}");
+    let script = http_get(&format!(
+        "http://127.0.0.1:{}/Zorvane/play/webgpu/app.js",
+        pairing.port().unwrap()
+    ));
+    assert!(script.contains("script-ok"), "{script}");
+    let escaped = http_get(&format!(
+        "http://127.0.0.1:{}/Zorvane/play/webgpu/../../secret",
+        pairing.port().unwrap()
+    ));
+    assert!(escaped.starts_with("HTTP/1.1 404"), "{escaped}");
+    fixture_thread.join().unwrap();
+}
+
+fn http_get(url: &str) -> String {
+    use std::io::{Read, Write};
+    let url = url::Url::parse(url).unwrap();
+    let mut stream =
+        std::net::TcpStream::connect((url.host_str().unwrap(), url.port().unwrap())).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let path = format!(
+        "{}{}",
+        url.path(),
+        url.query()
+            .map(|query| format!("?{query}"))
+            .unwrap_or_default()
+    );
+    stream
+        .write_all(
+            format!(
+                "GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                url.host_str().unwrap()
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let mut body = String::new();
+    let _ = stream.read_to_string(&mut body);
+    body
 }

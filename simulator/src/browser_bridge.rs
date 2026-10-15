@@ -68,7 +68,7 @@ pub(super) fn install(app: &mut App, shared: Arc<Shared>, config: &BridgeConfig)
     }) && token.len() == 64
         && token.bytes().all(|b| b.is_ascii_hexdigit());
     if !valid {
-        status("Connection unavailable. Open a fresh pairing URL from the Rust client.");
+        status("Connection unavailable. Open a fresh pairing URL from the Zorvane client.");
         return false;
     }
     let now = Instant::now();
@@ -91,13 +91,13 @@ pub(super) fn install(app: &mut App, shared: Arc<Shared>, config: &BridgeConfig)
     })
     .add_systems(PreUpdate, poll.before(crate::terra::reconcile_fleet))
     .add_systems(FixedPreUpdate, enforce_lease);
-    status("Connecting to Rust client. Allow local-network access if the browser requests it.");
+    status("Connecting to the Zorvane client.");
     true
 }
 
 impl BrowserTransport {
     fn connect(&mut self) -> Result<(), String> {
-        let socket = WebSocket::new(&self.endpoint).map_err(|_| "Browser blocked the local connection. Allow local-network access and reopen the pairing URL.".to_string())?;
+        let socket = WebSocket::new(&self.endpoint).map_err(|_| "The browser could not open the simulator connection. Reopen the pairing URL from the client.".to_string())?;
         socket.set_binary_type(web_sys::BinaryType::Arraybuffer);
         let incoming = self.inbox.clone();
         let message = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
@@ -216,14 +216,14 @@ impl BrowserTransport {
         }
         let inbox = std::mem::take(&mut *self.inbox.borrow_mut());
         if inbox.failed {
-            return Err("Connection failed. Check local-network permission and the Rust client, then reopen the pairing URL.".into());
+            return Err(
+                "Connection failed. Reopen the pairing URL printed by the Zorvane client.".into(),
+            );
         }
         for message in inbox.messages {
             match message {
                 Incoming::Closed => {
-                    return Err(
-                        "Rust client disconnected. Remote motion stopped; reconnecting.".into(),
-                    );
+                    return Err("Client disconnected. Remote motion stopped; reconnecting.".into());
                 }
                 Incoming::Text(text) if text.len() <= 1024 * 1024 => {
                     match serde_json::from_str::<Control>(&text)
@@ -233,7 +233,9 @@ impl BrowserTransport {
                             self.last_received = Instant::now();
                             self.shared.epoch.fetch_add(1, Ordering::Relaxed);
                             self.shared.connected.store(true, Ordering::Release);
-                            status("Connected to Rust client. Select a world and press Start.");
+                            status(
+                                "Connected to the Zorvane client. Select a world and press Start.",
+                            );
                         }
                         Control::Heartbeat if self.shared.connected.load(Ordering::Acquire) => {
                             self.last_received = Instant::now();
@@ -403,7 +405,7 @@ impl BrowserTransport {
 
 impl Drop for BrowserTransport {
     fn drop(&mut self) {
-        self.disconnect("Rust connection closed.");
+        self.disconnect("Client connection closed.");
     }
 }
 

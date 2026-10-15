@@ -25,9 +25,9 @@
     <script>
       const bridgeStatus = document.getElementById("bridge-status");
       if (!navigator.gpu) {
-        bridgeStatus.textContent = "WebGPU is unavailable. Open this pairing URL in a WebGPU-capable browser with hardware acceleration enabled.";
+        bridgeStatus.textContent = "WebGPU is unavailable in this browser.";
       } else if (!location.hash.includes("endpoint=")) {
-        bridgeStatus.textContent = "Rust connection inactive. Open the pairing URL printed by the Rust client.";
+        bridgeStatus.textContent = "Client connection inactive. Open the pairing URL printed by the Zorvane client.";
       }
       window.addEventListener("error", () => {
         bridgeStatus.textContent = "Simulator startup failed. Check WebGPU support and the browser console, then reload the pairing URL.";

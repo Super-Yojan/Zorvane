@@ -26,6 +26,8 @@ SOURCES = {
 REPLACEMENTS = (
     ("](../docs/browser-client.md)", "](../browser-client.md)"),
     ("](docs/browser-client.md)", "](../browser-client.md)"),
+    ("](docs/dev/native-zenoh.md)", "](../dev/native-zenoh.md)"),
+    ("](docs/dev/browser-gateway.md)", "](../dev/browser-gateway.md)"),
     ("](simulator/ZENOH.md)", "](zenoh.md)"),
     ("](simulator/NEXT.md)", "](next.md)"),
     ("](simulator/WORLD.md)", "](world.md)"),

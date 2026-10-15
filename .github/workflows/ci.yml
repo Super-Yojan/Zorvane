@@ -62,7 +62,9 @@ jobs:
         run: |
           python3 -m venv .venv
           .venv/bin/pip install -r simulator/tools/requirements.txt
+          .venv/bin/pip install -e clients/python
           .venv/bin/python -m unittest discover -s simulator/tools -p 'test_*.py'
+          .venv/bin/python -m unittest discover -s clients/python/tests -p 'test_*.py'
 
       - name: Cargo test
         env:

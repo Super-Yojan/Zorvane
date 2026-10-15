@@ -1,6 +1,6 @@
 # Terra fleet, camera frames, and Zenoh control
 
-**TL;DR.** Prefix `terra/rover`. One peer on `tcp/127.0.0.1:7447`. No router. TerraPhone and ARGOS keep their keys.
+**TL;DR.** Prefix `terra/rover`. One peer on `tcp/127.0.0.1:7447`. No router. TerraPhone and ARGOS keep their keys. Student programs use the [browser client](../docs/browser-client.md) instead of this socket.
 
 ```mermaid
 flowchart LR

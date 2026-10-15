@@ -20,78 +20,30 @@ the Zenoh bridge those operators already speak.
 
 ## Run
 
-Rust stable new enough for edition 2024 (1.85 or newer; 1.99 is known to work),
-plus a C toolchain, pkg-config, and the Bevy window libraries:
+Connect a client. It prints a pairing URL. Open that URL on the same computer, choose a world, and press Start.
+
+Python 3.10 or newer, or Rust 1.85 or newer.
 
 ```sh
-sudo apt-get install -y pkg-config build-essential \
-  libwayland-dev libxkbcommon-dev libvulkan-dev \
-  libxcursor-dev libxrandr-dev libxi-dev libx11-xcb-dev \
-  libasound2-dev libudev-dev
+python3 -m pip install -e clients/python
+python3 -m zorvane
 ```
-
-`rover.glb` is Git LFS (about 118 MB). Clone with `git lfs install` and
-`git lfs pull`.
 
 ```sh
-cargo run -p zorvane
+cargo run -p zorvane-client --example print_pose
 ```
 
-The window opens on a start screen (practice town, elevation tiles, or the NEXT pitch, plus a rover count). Esc pauses. `ZORVANE_MENU=0` skips it. Headless and smoke runs skip it on their own.
+Drive by publishing velocity at least every 500 ms, and send zeros to stop. See [docs/browser-client.md](docs/browser-client.md). Dimensions and sources are in [SCALE.md](SCALE.md).
 
-The same UI is a static page at <https://super-yojan.dev/Zorvane/play/> (no voxel hills). The [Rust browser client](docs/browser-client.md) embeds its gateway inside your Rust process and pairs with the WebGPU play build for full command, telemetry, and sensor access. Dimensions and sources are in [SCALE.md](SCALE.md).
-
-The normal build includes Terra's A* waypoint routing; no adjacent Terra
-checkout or local launcher is required. With Zenoh enabled, select `waypoint`
-autonomy and send a goal through the existing rover topics. The rover plans
-around obstacles in its depth-derived occupancy map. Unknown or unreachable
-routes hold motion until a safe route becomes available. Route points are
-published as `global_route` in `autonomy/status` when a route is available.
-
-Headless, without Zenoh, exiting after the world schedule starts:
-
-```sh
-TERRA_HEADLESS=1 TERRA_ZENOH=0 ZORVANE_SMOKE=1 cargo run -p zorvane
-```
-
-A windowed run needs a display. `TERRA_HEADLESS=1` disables winit and steps the
-app on a timer. Rendering still asks Vulkan for a device; lavapipe
-(`mesa-vulkan-drivers`) is enough:
-
-```sh
-export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-export WGPU_BACKEND=vulkan
-export LIBGL_ALWAYS_SOFTWARE=1
-TERRA_HEADLESS=1 TERRA_ZENOH=0 cargo run -p zorvane
-```
-
-Leave the process running and drive rover 0 from another terminal. Topics are
-unchanged (`terra/rover/<id>/cmd_vel`, `goal`, cameras, fleet). See
-[simulator/ZENOH.md](simulator/ZENOH.md).
-
-![Driving on the NEXT pitch](docs/assets/drive.gif)
-
-*Forward motion with Zenoh off. The same twist is `cmd_vel` when Zenoh is on.*
-
-```sh
-python3 -m pip install -r simulator/tools/requirements.txt
-python3 simulator/tools/zenoh_client.py --rover 0 drive --linear 0.4 --angular 0 --seconds 2
-```
-
-`TERRA_TILES=1` loads the real-elevation patch. `TERRA_NEXT=1` loads the NEXT
-competition practice pitch instead, with Zatara (spawn slot 0 on the
-`terra-ground` body), tennis balls, and deposit buckets. See
-[simulator/NEXT.md](simulator/NEXT.md). `TERRA_ROVER_COUNT` sets the fleet size
-(0 through 32). `ZORVANE_VEHICLE` selects a registered body and defaults to
-`terra-ground`. `ZORVANE_ASSETS` overrides the asset root (default
-`simulator/assets`).
-
-World layout and tile variables: [simulator/WORLD.md](simulator/WORLD.md).
+Desktop, headless, and native Zenoh setups: [docs/dev/native-zenoh.md](docs/dev/native-zenoh.md). The gateway internals: [docs/dev/browser-gateway.md](docs/dev/browser-gateway.md).
 
 ## Test
 
 ```sh
 cargo test --workspace
+python3 -m pip install -r simulator/tools/requirements.txt
+python3 -m pip install -e clients/python
+python3 -m unittest discover -s clients/python/tests -p 'test_*.py'
 python3 -m unittest discover -s simulator/tools -p 'test_*.py'
 ```
 

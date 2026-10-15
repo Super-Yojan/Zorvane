@@ -11,6 +11,7 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+use subtle::ConstantTimeEq;
 use tungstenite::{
     Message, WebSocket,
     handshake::server::{Request, Response},
@@ -24,8 +25,13 @@ use zorvane_browser_protocol::{
 #[derive(Clone, Debug)]
 pub struct BrowserHostConfig {
     pub bind_addr: SocketAddr,
+    /// HTTPS URLs are proxied and opened from this process. Loopback HTTP is
+    /// opened directly so a local Trunk server can supply the page.
     pub play_url: String,
     pub recording_dir: PathBuf,
+    /// Proxy `play_url` even when it is loopback HTTP. Used by tests.
+    #[doc(hidden)]
+    pub force_proxy: bool,
 }
 
 impl Default for BrowserHostConfig {
@@ -34,6 +40,7 @@ impl Default for BrowserHostConfig {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             play_url: "https://super-yojan.dev/Zorvane/play/webgpu/".into(),
             recording_dir: "runs".into(),
+            force_proxy: false,
         }
     }
 }
@@ -87,22 +94,37 @@ fn random_id() -> Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+fn tokens_match(candidate: &str, token: &str) -> bool {
+    bool::from(candidate.as_bytes().ct_eq(token.as_bytes()))
+}
+
+fn loopback_http(url: &url::Url) -> bool {
+    if url.scheme() != "http" {
+        return false;
+    }
+    match url.host() {
+        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    }
+}
+
 impl BrowserHost {
     pub fn start(config: BrowserHostConfig) -> Result<Self> {
         if !config.bind_addr.ip().is_loopback() {
             return Err(error("browser host must bind to a loopback address"));
         }
-        let mut page = url::Url::parse(&config.play_url).map_err(error)?;
-        if page.scheme() != "https"
-            && !(page.scheme() == "http"
-                && matches!(page.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")))
-        {
+        let configured = url::Url::parse(&config.play_url).map_err(error)?;
+        if configured.scheme() != "https" && !loopback_http(&configured) {
             return Err(error("play_url must use HTTPS or loopback HTTP"));
         }
-        if !page.username().is_empty() || page.password().is_some() {
+        if !configured.username().is_empty() || configured.password().is_some() {
             return Err(error("play_url cannot contain credentials"));
         }
-        let origin = page.origin().ascii_serialization();
+        // A public HTTPS page cannot open ws://127.0.0.1. Serve that page from
+        // this loopback listener instead. Loopback HTTP is a developer's own server.
+        let proxy = configured.scheme() == "https" || config.force_proxy;
         let listener = TcpListener::bind(config.bind_addr).map_err(error)?;
         listener.set_nonblocking(true).map_err(error)?;
         let address = listener.local_addr().map_err(error)?;
@@ -111,37 +133,52 @@ impl BrowserHost {
             .append_pair("endpoint", &format!("ws://{address}/bridge"))
             .append_pair("token", &token)
             .finish();
+        let mut page = if proxy {
+            url::Url::parse(&format!(
+                "http://{address}{}",
+                crate::page::directory_prefix(&configured)
+            ))
+            .map_err(error)?
+        } else {
+            configured.clone()
+        };
         page.set_fragment(Some(&fragment));
+        let origin = page.origin().ascii_serialization();
+        let upstream = proxy.then_some(configured);
+        let http_agent = upstream.as_ref().map(|_| Arc::new(crate::page::agent()));
         let shared = Arc::new(Shared {
             state: Mutex::new(State::default()),
             changed: Condvar::new(),
             stop: AtomicBool::new(false),
         });
         let thread_shared = shared.clone();
+        let recording_dir = config.recording_dir.clone();
+        let session_gate = Arc::new(Mutex::new(()));
         let worker = thread::Builder::new()
             .name("zorvane-browser-host".into())
             .spawn(move || {
                 while !thread_shared.stop.load(Ordering::Acquire) {
                     match listener.accept() {
                         Ok((stream, _)) => {
-                            let result = serve(
-                                stream,
-                                &listener,
-                                &origin,
-                                &token,
-                                &config.recording_dir,
-                                &thread_shared,
-                            );
-                            let mut state = thread_shared.state.lock().unwrap();
-                            state.connection = ConnectionState::Disconnected(
-                                result
-                                    .err()
-                                    .unwrap_or_else(|| "browser disconnected".into()),
-                            );
-                            state.outgoing = Outbox::default();
-                            state.incoming = Outbox::default();
-                            state.fatal = None;
-                            thread_shared.changed.notify_all();
+                            let origin = origin.clone();
+                            let token = token.clone();
+                            let recording_dir = recording_dir.clone();
+                            let upstream = upstream.clone();
+                            let http_agent = http_agent.clone();
+                            let shared = thread_shared.clone();
+                            let session_gate = session_gate.clone();
+                            thread::spawn(move || {
+                                dispatch(
+                                    stream,
+                                    &origin,
+                                    &token,
+                                    &recording_dir,
+                                    upstream,
+                                    http_agent,
+                                    &shared,
+                                    &session_gate,
+                                );
+                            });
                         }
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                             thread::sleep(Duration::from_millis(5))
@@ -313,9 +350,106 @@ fn send(socket: &mut WebSocket<TcpStream>, control: &Control) -> std::result::Re
         .map_err(|e| e.to_string())
 }
 
+fn dispatch(
+    stream: TcpStream,
+    origin: &str,
+    token: &str,
+    directory: &std::path::Path,
+    upstream: Option<url::Url>,
+    http_agent: Option<Arc<ureq::Agent>>,
+    shared: &Arc<Shared>,
+    session_gate: &Arc<Mutex<()>>,
+) {
+    let peeked = match peek_headers(&stream, &shared.stop) {
+        Ok(bytes) => bytes,
+        Err(()) => return,
+    };
+    if !websocket_upgrade(&peeked) {
+        if let (Some(upstream), Some(agent)) = (upstream, http_agent) {
+            crate::page::serve(stream, &upstream, &agent);
+        }
+        return;
+    }
+    let connected = shared.state.lock().unwrap().connection == ConnectionState::Connected;
+    let _session = if connected {
+        match session_gate.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        }
+    } else {
+        session_gate.lock().unwrap()
+    };
+    let result = serve(stream, origin, token, directory, shared);
+    let mut state = shared.state.lock().unwrap();
+    state.connection = ConnectionState::Disconnected(
+        result
+            .err()
+            .unwrap_or_else(|| "browser disconnected".into()),
+    );
+    state.outgoing = Outbox::default();
+    state.incoming = Outbox::default();
+    state.fatal = None;
+    shared.changed.notify_all();
+}
+
+fn peek_headers(stream: &TcpStream, stop: &AtomicBool) -> std::result::Result<Vec<u8>, ()> {
+    stream.set_nonblocking(true).map_err(|_| ())?;
+    let mut buffer = vec![0u8; 8192];
+    let deadline = Instant::now() + Duration::from_millis(500);
+    loop {
+        if stop.load(Ordering::Acquire) {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+            return Err(());
+        }
+        match stream.peek(&mut buffer) {
+            Ok(0) => return Err(()),
+            Ok(count)
+                if buffer[..count]
+                    .windows(4)
+                    .any(|window| window == b"\r\n\r\n") =>
+            {
+                return Ok(buffer[..count].to_vec());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(_) => return Err(()),
+        }
+        if Instant::now() >= deadline {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+            return Err(());
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn websocket_upgrade(bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let mut lines = text.split("\r\n");
+    let Some(request) = lines.next() else {
+        return false;
+    };
+    let mut parts = request.split_whitespace();
+    let Some(method) = parts.next() else {
+        return false;
+    };
+    let Some(target) = parts.next() else {
+        return false;
+    };
+    let path = target.split('?').next().unwrap_or(target);
+    method == "GET"
+        && path == "/bridge"
+        && lines.any(|line| {
+            line.split_once(':').is_some_and(|(name, value)| {
+                name.eq_ignore_ascii_case("upgrade")
+                    && value.trim().eq_ignore_ascii_case("websocket")
+            })
+        })
+}
+
 fn serve(
     stream: TcpStream,
-    listener: &TcpListener,
     origin: &str,
     token: &str,
     directory: &std::path::Path,
@@ -371,9 +505,15 @@ fn serve(
         );
         return Err("pairing message could not be read".into());
     }
-    let authenticated = match hello {
+    let authenticated = match &hello {
         Ok(Message::Text(text)) if text.len() <= 4096 => {
-            matches!(serde_json::from_str::<Control>(&text), Ok(Control::Hello { version: VERSION, token: candidate }) if candidate == token)
+            match serde_json::from_str::<Control>(text) {
+                Ok(Control::Hello {
+                    version,
+                    token: candidate,
+                }) => version == VERSION && tokens_match(&candidate, token),
+                _ => false,
+            }
         }
         _ => false,
     };
@@ -403,13 +543,6 @@ fn serve(
     let mut recorder: Option<terra_experiment::RunRecorder> = None;
     let mut run_id: Option<String> = None;
     while !shared.stop.load(Ordering::Acquire) {
-        // Reject competing tabs without blocking the active socket's lease.
-        for _ in 0..16 {
-            match listener.accept() {
-                Ok((extra, _)) => drop(extra),
-                Err(_) => break,
-            }
-        }
         if last_received.elapsed() >= Duration::from_millis(LEASE_MS) {
             return Err("browser heartbeat expired".into());
         }
