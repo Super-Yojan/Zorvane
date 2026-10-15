@@ -90,6 +90,7 @@ nav:
   - Scale: reference/scale.md
   - Zenoh: reference/zenoh.md
   - Python client: python-client.md
+  - Rust browser client: browser-client.md
   - Depth camera: reference/depth-camera.md
   - Migration from Terra: reference/migration.md
   - API: api.md

@@ -39,7 +39,7 @@ cargo run -p zorvane
 
 The window opens on a start screen (practice town, elevation tiles, or the NEXT pitch, plus a rover count). Esc pauses. `ZORVANE_MENU=0` skips it. Headless and smoke runs skip it on their own.
 
-After this lands on `main`, the same UI is a static page at <https://super-yojan.dev/Zorvane/play/> (no Zenoh, no voxel hills). Dimensions and sources are in [SCALE.md](SCALE.md).
+The same UI is a static page at <https://super-yojan.dev/Zorvane/play/> (no voxel hills). The [Rust browser client](docs/browser-client.md) embeds its gateway inside your Rust process and pairs with the WebGPU play build for full command, telemetry, and sensor access. Dimensions and sources are in [SCALE.md](SCALE.md).
 
 The normal build includes Terra's A* waypoint routing; no adjacent Terra
 checkout or local launcher is required. With Zenoh enabled, select `waypoint`
@@ -101,6 +101,8 @@ GPU render tests are `#[ignore]`.
 
 - `simulator/` — Bevy/Avian world, cameras, occupancy, Zenoh bridge. Binary name: `zorvane`.
 - `crates/zorvane-vehicle/` — the body seam. `TerraGround` is the chassis that used to be hard-coded in Terra.
+- `crates/zorvane-client/` — native Zenoh client and embedded browser gateway.
+- `crates/zorvane-browser-protocol/` — shared browser/host framing and bounded queues.
 - Shared crates (`terra-types`, `terra-control`, `terra-waypoint`, `terra-transport`, and the autonomy stack) stay in Terra and are git dependencies pinned in `Cargo.toml`. TerraPhone still compiles them there.
 
 What to delete from Terra after this lands: [MIGRATION.md](MIGRATION.md).

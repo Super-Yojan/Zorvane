@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Zorvane</title>
+    <link data-trunk rel="rust" data-bin="zorvane" data-cargo-no-default-features data-cargo-features="browser-bridge" />
+    <link data-trunk rel="copy-dir" href="assets" />
+    <link data-trunk rel="css" href="web/bridge.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #1e2124;
+        overflow: hidden;
+      }
+      canvas {
+        width: 100% !important;
+        height: 100% !important;
+      }
+    </style>
+  </head>
+  <body>
+    <p id="bridge-status" role="status" aria-live="polite">Loading WebGPU simulator.</p>
+    <script>
+      const bridgeStatus = document.getElementById("bridge-status");
+      if (!navigator.gpu) {
+        bridgeStatus.textContent = "WebGPU is unavailable. Open this pairing URL in a WebGPU-capable browser with hardware acceleration enabled.";
+      } else if (!location.hash.includes("endpoint=")) {
+        bridgeStatus.textContent = "Rust connection inactive. Open the pairing URL printed by the Rust client.";
+      }
+      window.addEventListener("error", () => {
+        bridgeStatus.textContent = "Simulator startup failed. Check WebGPU support and the browser console, then reload the pairing URL.";
+      });
+    </script>
+  </body>
+</html>

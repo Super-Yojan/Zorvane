@@ -24,6 +24,8 @@ SOURCES = {
 
 # Longer patterns first so a prefix is not rewritten twice.
 REPLACEMENTS = (
+    ("](../docs/browser-client.md)", "](../browser-client.md)"),
+    ("](docs/browser-client.md)", "](../browser-client.md)"),
     ("](simulator/ZENOH.md)", "](zenoh.md)"),
     ("](simulator/NEXT.md)", "](next.md)"),
     ("](simulator/WORLD.md)", "](world.md)"),

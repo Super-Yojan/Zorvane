@@ -86,3 +86,8 @@ jobs:
         env:
           CARGO_BUILD_JOBS: "2"
         run: cargo check --locked -p zorvane --target wasm32-unknown-unknown --no-default-features
+
+      - name: Check WebGPU bridge build
+        env:
+          CARGO_BUILD_JOBS: "2"
+        run: cargo check --locked -p zorvane --target wasm32-unknown-unknown --no-default-features --features browser-bridge

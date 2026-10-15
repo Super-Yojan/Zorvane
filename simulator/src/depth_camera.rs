@@ -52,7 +52,7 @@ impl Plugin for TerraDepthCameraPlugin {
             );
         // WebGL2 cannot copy a depth texture into a buffer. The browser build
         // keeps the overview camera and skips the sensor readback.
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(any(not(target_arch = "wasm32"), feature = "browser-bridge"))]
         if app.get_sub_app(RenderApp).is_some() {
             app.add_plugins((
                 ExtractComponentPlugin::<DepthCamera>::default(),

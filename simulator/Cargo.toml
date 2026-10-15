@@ -9,9 +9,12 @@ publish = false
 default = ["native"]
 # Threads, Zenoh, and the voxel mesher stay on the desktop build.
 native = ["dep:zenoh", "dep:terra-transport", "dep:bevy_voxel_world", "dep:bevytiles"]
+browser-bridge = ["bevy/webgpu"]
 
 [dependencies]
 zorvane-vehicle.workspace = true
+zorvane-browser-protocol.workspace = true
+web-time = "1"
 terra-transport = { workspace = true, optional = true }
 terra-autonomy.workspace = true
 terra-navigation.workspace = true
@@ -34,6 +37,9 @@ serde_json = "1.0.151"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1.7"
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Location", "WebSocket", "BinaryType", "MessageEvent", "CloseEvent", "Event", "Document", "Element", "VisibilityState", "Navigator", "Url", "UrlSearchParams"] }
 # Transitive crates pull three getrandom majors. Each wasm target needs its
 # JS backend or the crate fails to compile. Renames keep the versions distinct.
 image = { version = "0.25", default-features = false, features = ["png"] }

@@ -109,7 +109,7 @@ GPU tests are `#[ignore]`. They write `/tmp/terra-world-preview.png`.
 | `TERRA_ZENOH_TEST_PYTHON` | unset | Interpreter for the ignored round-trip test. |
 | `TERRA_TEST_ZENOH_ENDPOINT` | unset | Enables the live Python socket test. |
 
-The same window runs in a browser after a merge to `main` publishes it: <https://super-yojan.dev/Zorvane/play/>. That build has no Zenoh and no voxel hills. The elevation view uses the bundled Terrarium PNG. `rover.glb` is about 118 MB, so the mesh appears after that download. [Step 2](step-2.md) prints pose from the native simulator.
+The same window runs in a browser after a merge to `main` publishes it: <https://super-yojan.dev/Zorvane/play/>. The standalone build has no network bridge and no voxel hills. For full commands, telemetry, and sensors, use the [Rust browser client](browser-client.md) with the WebGPU play build. The elevation view uses the bundled Terrarium PNG. `rover.glb` is about 118 MB, so the mesh appears after that download. [Step 2](step-2.md) prints pose from either simulator.
 
 ```sh
 rustup target add wasm32-unknown-unknown

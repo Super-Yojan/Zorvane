@@ -1,4 +1,4 @@
-//! Nonblocking, latest-frame Zenoh bridge and leased remote differential drive.
+//! Transport-independent telemetry, leased control, mapping, and autonomy.
 use crate::{
     depth_camera::{DepthCamera, DepthCameraConfig, DepthFrame},
     rgb_camera::RgbFrame,
@@ -11,43 +11,60 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::{Duration, Instant};
 use terra_waypoint::{GoalCommand, decode_goal, encode_status};
 #[cfg(test)]
 use terra_waypoint::{GoalState, WaypointConfig, WaypointController};
+use web_time::{Duration, Instant};
+#[cfg(feature = "native")]
 use zenoh::Wait;
+#[cfg(feature = "native")]
+#[path = "native_bridge.rs"]
+mod native;
+#[cfg(feature = "native")]
+use native::run_transport;
+#[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
+#[path = "browser_bridge.rs"]
+mod browser;
+#[path = "bridge_recording.rs"]
+mod recording;
 
 #[path = "publish_gate.rs"]
 mod publish_gate;
 
 #[derive(Clone, Resource)]
-pub struct ZenohBridgeConfig {
+pub struct BridgeConfig {
     pub enabled: bool,
     pub prefix: String,
+    #[cfg(feature = "native")]
     pub listen: String,
+    #[cfg(feature = "native")]
     pub config_file: Option<String>,
     pub frame_rate: f32,
     pub command_timeout: Duration,
 }
-impl Default for ZenohBridgeConfig {
+impl Default for BridgeConfig {
     fn default() -> Self {
         Self {
             enabled: true,
             prefix: "terra/rover".into(),
+            #[cfg(feature = "native")]
             listen: "tcp/127.0.0.1:7447".into(),
+            #[cfg(feature = "native")]
             config_file: None,
             frame_rate: 10.0,
             command_timeout: Duration::from_millis(500),
         }
     }
 }
-impl ZenohBridgeConfig {
+impl BridgeConfig {
     pub fn from_env() -> Self {
         Self {
             enabled: std::env::var("TERRA_ZENOH").map_or(true, |v| v != "0"),
             prefix: std::env::var("TERRA_ZENOH_PREFIX").unwrap_or_else(|_| "terra/rover".into()),
+            #[cfg(feature = "native")]
             listen: std::env::var("TERRA_ZENOH_LISTEN")
                 .unwrap_or_else(|_| "tcp/127.0.0.1:7447".into()),
+            #[cfg(feature = "native")]
             config_file: std::env::var("TERRA_ZENOH_CONFIG").ok(),
             ..default()
         }
@@ -60,12 +77,12 @@ impl ZenohBridgeConfig {
         {
             return Err("frame rate must be in [0.1,60] and command timeout must be positive");
         }
-        if self.prefix.contains('*') || zenoh::key_expr::KeyExpr::new(self.prefix.as_str()).is_err()
-        {
+        if !zorvane_browser_protocol::valid_topic(&self.prefix, false) {
             return Err("prefix must be a concrete Zenoh key expression");
         }
         Ok(())
     }
+    #[cfg(feature = "native")]
     fn session_config(&self) -> zenoh::Result<zenoh::Config> {
         if let Some(path) = &self.config_file {
             return zenoh::Config::from_file(path);
@@ -81,10 +98,10 @@ impl ZenohBridgeConfig {
     }
 }
 #[derive(Default)]
-pub struct TerraZenohPlugin {
-    pub config: ZenohBridgeConfig,
+pub struct SimulatorBridgePlugin {
+    pub config: BridgeConfig,
 }
-impl Plugin for TerraZenohPlugin {
+impl Plugin for SimulatorBridgePlugin {
     fn build(&self, app: &mut App) {
         if !self.config.enabled {
             return;
@@ -93,17 +110,24 @@ impl Plugin for TerraZenohPlugin {
             .validate()
             .expect("invalid Terra Zenoh configuration");
         let shared = Arc::new(Shared::default());
-        let thread_shared = shared.clone();
-        let config = self.config.clone();
-        std::thread::Builder::new()
-            .name("terra-zenoh".into())
-            .spawn(move || {
-                if let Err(error) = run_transport(&config, &thread_shared) {
-                    warn!("Terra Zenoh transport stopped: {error}");
-                }
-                thread_shared.connected.store(false, Ordering::Release);
-            })
-            .expect("could not start Zenoh worker");
+        #[cfg(feature = "native")]
+        {
+            let thread_shared = shared.clone();
+            let config = self.config.clone();
+            std::thread::Builder::new()
+                .name("terra-zenoh".into())
+                .spawn(move || {
+                    if let Err(error) = run_transport(&config, &thread_shared) {
+                        warn!("Terra Zenoh transport stopped: {error}");
+                    }
+                    thread_shared.connected.store(false, Ordering::Release);
+                })
+                .expect("could not start Zenoh worker");
+        }
+        #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
+        if !browser::install(app, shared.clone(), &self.config) {
+            return;
+        }
         app.insert_resource(self.config.clone())
             .insert_resource(Bridge { shared })
             .add_systems(
@@ -177,10 +201,87 @@ struct Shared {
     goals: Mutex<BTreeMap<u64, GoalInbox>>,
     actions: Mutex<BTreeMap<u64, std::collections::VecDeque<(String, Vec<u8>, Instant)>>>,
     goal_seq: std::sync::atomic::AtomicU64,
+    epoch: std::sync::atomic::AtomicU64,
     fleet_request: Mutex<Option<usize>>,
     outgoing: Mutex<Outgoing>,
     connected: AtomicBool,
     stop: AtomicBool,
+    #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
+    recording: recording::BrowserRecording,
+}
+impl Shared {
+    fn receive(&self, prefix: &str, key: &str, bytes: &[u8]) {
+        if bytes.len() > 2048 {
+            return;
+        }
+        if key == format!("{prefix}/fleet/size") {
+            if let Some(count) = decode_fleet_request(bytes) {
+                *self.fleet_request.lock().unwrap() = Some(count);
+            }
+            return;
+        }
+        let Some((id, kind)) = key
+            .strip_prefix(&format!("{prefix}/"))
+            .and_then(|rest| rest.split_once('/'))
+        else {
+            return;
+        };
+        let Ok(id) = id.parse::<u64>() else {
+            return;
+        };
+        if !self.commands.lock().unwrap().contains_key(&id) {
+            return;
+        }
+        match kind {
+            "cmd_vel" => {
+                if let Some(command) = decode_command(bytes) {
+                    self.commands
+                        .lock()
+                        .unwrap()
+                        .insert(id, Some((command, Instant::now())));
+                }
+            }
+            "goal" => {
+                if let Some(command) = decode_goal(bytes) {
+                    let seq = self.goal_seq.fetch_add(1, Ordering::Relaxed) + 1;
+                    self.goals
+                        .lock()
+                        .unwrap()
+                        .insert(id, GoalInbox { seq, command });
+                }
+            }
+            "autonomy" | "teleop" | "safety" | "goal/decision" | "mission/report" | "search"
+            | "search/action" | "search/report/ack" => {
+                let mut actions = self.actions.lock().unwrap();
+                zorvane_browser_protocol::enqueue_control_action(
+                    actions.entry(id).or_default(),
+                    kind.into(),
+                    bytes.to_vec(),
+                    Instant::now(),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    #[cfg(any(test, all(target_arch = "wasm32", feature = "browser-bridge")))]
+    fn disconnect(&self) {
+        self.connected.store(false, Ordering::Release);
+        self.commands
+            .lock()
+            .unwrap()
+            .values_mut()
+            .for_each(|slot| *slot = None);
+        self.goals.lock().unwrap().clear();
+        self.actions.lock().unwrap().clear();
+        *self.fleet_request.lock().unwrap() = None;
+        *self.outgoing.lock().unwrap() = Outgoing::default();
+        #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
+        {
+            self.recording.healthy.store(false, Ordering::Release);
+            self.recording.events.lock().unwrap().clear();
+        }
+    }
 }
 #[derive(Resource)]
 struct Bridge {
@@ -229,7 +330,7 @@ type RemoteRovers<'w, 's> = Query<
 #[cfg(test)]
 fn apply_remote_commands(
     bridge: Res<Bridge>,
-    config: Res<ZenohBridgeConfig>,
+    config: Res<BridgeConfig>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
     mut rovers: RemoteRovers<'_, '_>,
 ) {
@@ -384,209 +485,6 @@ fn drive_goals(
     runtime.rovers.retain(|id, _| seen.contains(id));
 }
 
-fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Result<()> {
-    let session = zenoh::open(config.session_config()?).wait()?;
-    let incoming = shared.clone();
-    let action_prefix = config.prefix.clone();
-    let _actions = session
-        .declare_subscriber(format!("{}/*/**", config.prefix))
-        .callback(move |sample| {
-            let key = sample.key_expr().as_str();
-            let Some(rest) = key.strip_prefix(&format!("{action_prefix}/")) else {
-                return;
-            };
-            let Some((id, kind)) = rest.split_once('/') else {
-                return;
-            };
-            let Ok(id) = id.parse::<u64>() else {
-                return;
-            };
-            if !matches!(
-                kind,
-                "autonomy"
-                    | "teleop"
-                    | "safety"
-                    | "goal/decision"
-                    | "mission/report"
-                    | "search"
-                    | "search/action"
-                    | "search/report/ack"
-            ) {
-                return;
-            }
-            if !incoming.commands.lock().unwrap().contains_key(&id) {
-                return;
-            }
-            let bytes = sample.payload().to_bytes();
-            if bytes.len() > 2048 {
-                return;
-            }
-            let mut actions = incoming.actions.lock().unwrap();
-            let queue = actions.entry(id).or_default();
-            terra_transport::enqueue_control_action(
-                queue,
-                kind.into(),
-                bytes.to_vec(),
-                Instant::now(),
-            );
-        })
-        .wait()?;
-    let incoming = shared.clone();
-    let prefix = config.prefix.clone();
-    let _subscriber = session
-        .declare_subscriber(format!("{}/*/cmd_vel", prefix))
-        .callback(move |sample| {
-            let key = sample.key_expr().as_str();
-            let Some(id) = key
-                .strip_prefix(&format!("{prefix}/"))
-                .and_then(|key| key.strip_suffix("/cmd_vel"))
-                .and_then(|id| id.parse::<u64>().ok())
-            else {
-                return;
-            };
-            if let Some(command) = decode_command(&sample.payload().to_bytes())
-                && let Some(slot) = incoming.commands.lock().unwrap().get_mut(&id)
-            {
-                *slot = Some((command, Instant::now()));
-            }
-        })
-        .wait()?;
-    let incoming = shared.clone();
-    let prefix = config.prefix.clone();
-    let _goal_subscriber = session
-        .declare_subscriber(format!("{prefix}/*/goal"))
-        .callback(move |sample| {
-            let key = sample.key_expr().as_str();
-            let Some(id) = key
-                .strip_prefix(&format!("{prefix}/"))
-                .and_then(|key| key.strip_suffix("/goal"))
-                .and_then(|id| id.parse::<u64>().ok())
-            else {
-                return;
-            };
-            let Some(command) = decode_goal(&sample.payload().to_bytes()) else {
-                return;
-            };
-            if !incoming.commands.lock().unwrap().contains_key(&id) {
-                return;
-            }
-            let seq = incoming
-                .goal_seq
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                + 1;
-            incoming
-                .goals
-                .lock()
-                .unwrap()
-                .insert(id, GoalInbox { seq, command });
-        })
-        .wait()?;
-    let incoming = shared.clone();
-    let _fleet_subscriber = session
-        .declare_subscriber(format!("{}/fleet/size", config.prefix))
-        .callback(move |sample| {
-            if let Some(count) = decode_fleet_request(&sample.payload().to_bytes()) {
-                *incoming.fleet_request.lock().unwrap() = Some(count);
-            }
-        })
-        .wait()?;
-    shared.connected.store(true, Ordering::Release);
-    info!(
-        "Terra Zenoh ready: {}/<id>/{{cmd_vel,goal,pose}}, {}/<id>/goal/status, {}/<id>/camera/{{rgb,depth}} (depth includes exposure pose), {}/fleet/{{size,state}}",
-        config.prefix, config.prefix, config.prefix, config.prefix
-    );
-    let mut occupancy_baselines = BTreeMap::<u64, OccupancyBaseline>::new();
-    while !shared.stop.load(Ordering::Acquire) {
-        let outgoing = std::mem::take(&mut *shared.outgoing.lock().unwrap());
-        for ((id, kind), payload) in outgoing.frames {
-            if !shared.commands.lock().unwrap().contains_key(&id) {
-                continue;
-            }
-            session
-                .put(format!("{}/{id}/camera/{kind}", config.prefix), payload)
-                .encoding(zenoh::bytes::Encoding::APPLICATION_OCTET_STREAM)
-                .congestion_control(zenoh::qos::CongestionControl::Drop)
-                .wait()?;
-        }
-        if let Some(state) = outgoing.fleet {
-            session
-                .put(format!("{}/fleet/state", config.prefix), state)
-                .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
-                .congestion_control(zenoh::qos::CongestionControl::Drop)
-                .wait()?;
-        }
-        let live: std::collections::BTreeSet<u64> =
-            shared.commands.lock().unwrap().keys().copied().collect();
-        occupancy_baselines.retain(|id, _| live.contains(id));
-        for ((id, kind), payload) in outgoing.states {
-            if live.contains(&id) {
-                session
-                    .put(format!("{}/{id}/{kind}", config.prefix), payload)
-                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
-                    .wait()?;
-            }
-        }
-        for (id, publication) in outgoing.occupancy {
-            if live.contains(&id) {
-                session
-                    .put(
-                        format!("{}/{id}/map/occupancy", config.prefix),
-                        publication.payload,
-                    )
-                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
-                    .wait()?;
-                // Commit only after the paired full payload was published.
-                occupancy_baselines.insert(id, publication.baseline);
-            }
-        }
-        for id in outgoing.occupancy_heartbeats {
-            if live.contains(&id)
-                && let Some(baseline) = occupancy_baselines.get(&id)
-            {
-                session
-                    .put(
-                        format!("{}/{id}/map/occupancy/heartbeat", config.prefix),
-                        serde_json::to_vec(baseline).unwrap(),
-                    )
-                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
-                    .wait()?;
-            }
-        }
-        for (id, reports) in outgoing.reports {
-            if live.contains(&id) {
-                for report in reports {
-                    session
-                        .put(format!("{}/{id}/search/report", config.prefix), report)
-                        .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
-                        .wait()?;
-                }
-            }
-        }
-        for (id, payload) in outgoing.goals {
-            if !live.contains(&id) {
-                continue;
-            }
-            session
-                .put(format!("{}/{id}/goal/status", config.prefix), payload)
-                .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
-                .congestion_control(zenoh::qos::CongestionControl::Drop)
-                .wait()?;
-        }
-        for (id, payload) in outgoing.poses {
-            if !live.contains(&id) {
-                continue;
-            }
-            session
-                .put(format!("{}/{id}/pose", config.prefix), payload)
-                .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
-                .congestion_control(zenoh::qos::CongestionControl::Drop)
-                .wait()?;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    shared.connected.store(false, Ordering::Release);
-    session.close().wait()
-}
 #[derive(Serialize)]
 struct FrameHeader {
     rover_id: u64,
@@ -686,6 +584,7 @@ fn encode_depth_with_config(
 }
 #[derive(Default)]
 struct PublishState {
+    epoch: u64,
     last_publish: Option<Instant>,
     sequences: BTreeMap<u64, (Option<u64>, Option<u64>)>,
     fleet_ids: Vec<u64>,
@@ -693,12 +592,16 @@ struct PublishState {
 }
 fn publish_frames(
     bridge: Res<Bridge>,
-    config: Res<ZenohBridgeConfig>,
+    config: Res<BridgeConfig>,
     depth: Query<(&RoverId, &DepthCamera, &DepthFrame)>,
     rgb: Query<(&RoverId, &RgbFrame, &crate::rgb_camera::RgbCamera)>,
     rovers: Query<(&RoverId, &Transform), With<Rover>>,
     mut state: Local<PublishState>,
 ) {
+    let epoch = bridge.shared.epoch.load(Ordering::Relaxed);
+    if state.epoch != epoch {
+        *state = PublishState { epoch, ..default() };
+    }
     let now = Instant::now();
     if !bridge.shared.connected.load(Ordering::Acquire)
         || state.last_publish.is_some_and(|last| {
@@ -783,9 +686,48 @@ fn publish_frames(
         }
     }
 }
-#[cfg(test)]
+#[cfg(all(test, feature = "native"))]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_handler_validates_routes_and_disconnect_discards_intents() {
+        let shared = Shared::default();
+        shared.commands.lock().unwrap().insert(3, None);
+        shared.connected.store(true, Ordering::Release);
+        shared.receive(
+            "terra/rover",
+            "terra/rover/3/cmd_vel",
+            br#"{"linear":0.4,"angular":0.2}"#,
+        );
+        assert_eq!(shared.commands.lock().unwrap()[&3].unwrap().0.linear, 0.4);
+        shared.receive(
+            "terra/rover",
+            "terra/rover/99/cmd_vel",
+            br#"{"linear":1,"angular":0}"#,
+        );
+        assert!(!shared.commands.lock().unwrap().contains_key(&99));
+        shared.receive(
+            "terra/rover",
+            "terra/rover/3/safety",
+            br#"{"action":"stop","token":"stop-1"}"#,
+        );
+        shared.receive(
+            "terra/rover",
+            "terra/rover/3/goal",
+            br#"{"frame":"local","x":2,"y":0}"#,
+        );
+        shared.receive("terra/rover", "terra/rover/fleet/size", br#"{"count":2}"#);
+        assert_eq!(shared.goals.lock().unwrap().len(), 1);
+        assert_eq!(shared.actions.lock().unwrap()[&3].len(), 1);
+        assert_eq!(*shared.fleet_request.lock().unwrap(), Some(2));
+        shared.disconnect();
+        assert!(!shared.connected.load(Ordering::Acquire));
+        assert!(shared.commands.lock().unwrap()[&3].is_none());
+        assert!(shared.goals.lock().unwrap().is_empty());
+        assert!(shared.actions.lock().unwrap().is_empty());
+        assert!(shared.fleet_request.lock().unwrap().is_none());
+    }
+
     #[test]
     fn latest_occupancy_payload_and_baseline_replace_together() {
         let mut outgoing = Outgoing::default();
@@ -827,7 +769,7 @@ mod tests {
     }
     #[test]
     fn timeout_and_missing_commands_stop_the_rover() {
-        use std::time::{Duration, Instant};
+        use web_time::{Duration, Instant};
         let now = Instant::now();
         let timeout = Duration::from_millis(500);
         let command = DriveCommand {
@@ -967,14 +909,14 @@ mod tests {
         let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("tcp/{}", socket.local_addr().unwrap());
         drop(socket);
-        let config = ZenohBridgeConfig {
+        let config = BridgeConfig {
             listen: endpoint.clone(),
             command_timeout: Duration::from_millis(100),
             ..default()
         };
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_plugins(TerraZenohPlugin { config });
+            .add_plugins(SimulatorBridgePlugin { config });
         let rover = app
             .world_mut()
             .spawn((
@@ -1142,7 +1084,7 @@ mod tests {
             )),
         );
         app.insert_resource(Bridge { shared })
-            .insert_resource(ZenohBridgeConfig::default())
+            .insert_resource(BridgeConfig::default())
             .add_systems(FixedUpdate, apply_remote_commands);
         let first = app
             .world_mut()
@@ -1187,7 +1129,7 @@ mod tests {
         app.insert_resource(Bridge {
             shared: shared.clone(),
         })
-        .insert_resource(ZenohBridgeConfig::default())
+        .insert_resource(BridgeConfig::default())
         .add_systems(FixedUpdate, drive_goals);
         app.world_mut().spawn((
             Rover,
@@ -1251,8 +1193,8 @@ mod tests {
             .insert_resource(crate::physics::RoverPhysicsConfig::default())
             .init_resource::<RoverFleet>()
             .add_systems(PreUpdate, crate::terra::reconcile_fleet)
-            .add_plugins(TerraZenohPlugin {
-                config: ZenohBridgeConfig {
+            .add_plugins(SimulatorBridgePlugin {
+                config: BridgeConfig {
                     listen: endpoint.clone(),
                     ..default()
                 },
@@ -1369,8 +1311,8 @@ mod tests {
             bevy::mesh::MeshPlugin,
             crate::physics::TerraPhysicsPlugin,
             crate::velocity_controller::TerraVelocityControlPlugin,
-            TerraZenohPlugin {
-                config: ZenohBridgeConfig {
+            SimulatorBridgePlugin {
+                config: BridgeConfig {
                     listen: endpoint.clone(),
                     ..default()
                 },
@@ -1467,17 +1409,20 @@ struct AutonomyRuntime {
     rovers: BTreeMap<u64, AutonomousRover>,
     occupancy_gates: BTreeMap<u64, publish_gate::Gate<terra_mapping::MapSnapshot>>,
     was_connected: bool,
+    epoch: u64,
     start: Instant,
     run_id: String,
-    recorder: Option<terra_experiment::RunRecorder>,
+    recorder: Option<recording::Recorder>,
+    #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
+    manifest: serde_json::Value,
     mission: terra_experiment::Mission,
     last_publish: f64,
     sequence: u64,
 }
 impl Default for AutonomyRuntime {
     fn default() -> Self {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let stamp = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let run_id = format!("run-{stamp}");
@@ -1487,22 +1432,21 @@ impl Default for AutonomyRuntime {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(42),
         );
-        let root = std::env::var("TERRA_RUN_DIR").unwrap_or_else(|_| "runs".into());
-        let _ = std::fs::create_dir_all(&root);
         let manifest = serde_json::json!({"run_id":run_id,"platform":"bevy","mission":config,"trial_design":std::env::var("TERRA_TRIAL_DESIGN").unwrap_or_else(|_|"adaptive".into()),"planner":terra_navigation::PlannerConfig::default(),"collision_observation":"simulator_contacts","target_detector":{"id":"sim-survivor-v1","classes":["survivor"],"range_m":5,"half_fov_radians":std::f64::consts::FRAC_PI_3,"confirmation":terra_autonomy::ConfirmationConfig::default()},"git_revision":option_env!("TERRA_GIT_REVISION").unwrap_or("unknown")});
-        let recorder = terra_experiment::RunRecorder::create(
-            &std::path::Path::new(&root).join(format!("{run_id}.jsonl")),
-            manifest,
-            8192,
-        )
-        .ok();
+        #[cfg(feature = "native")]
+        let recorder = recording::Recorder::native(manifest.clone());
+        #[cfg(not(feature = "native"))]
+        let recorder = None;
         Self {
             rovers: BTreeMap::new(),
             occupancy_gates: BTreeMap::new(),
             was_connected: false,
+            epoch: 0,
             start: Instant::now(),
             run_id,
             recorder,
+            #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
+            manifest,
             mission: terra_experiment::Mission::new(config).unwrap(),
             last_publish: -1.,
             sequence: 0,
@@ -1537,12 +1481,26 @@ fn drive_autonomy(
 ) {
     use terra_autonomy::*;
     use terra_navigation::{Pose, Twist};
+    #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
+    if runtime.recorder.is_none() {
+        runtime.recorder = Some(recording::Recorder::browser(
+            bridge.shared.clone(),
+            runtime.run_id.clone(),
+            runtime.manifest.clone(),
+        ));
+    }
     let now = runtime.start.elapsed().as_secs_f64();
     let tick = time.elapsed_secs_f64();
     let connected = bridge.shared.connected.load(Ordering::Acquire);
-    if connected != runtime.was_connected {
+    let epoch = bridge.shared.epoch.load(Ordering::Relaxed);
+    if connected != runtime.was_connected || runtime.epoch != epoch {
         runtime.occupancy_gates.clear();
         runtime.was_connected = connected;
+        runtime.epoch = epoch;
+        #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
+        if !connected {
+            runtime.rovers.clear();
+        }
     }
     let incoming = bridge.shared.goals.lock().unwrap().clone();
     let remote = bridge.shared.commands.lock().unwrap().clone();
@@ -1623,7 +1581,9 @@ fn drive_autonomy(
             }
         }
         if let Some(mut queue) = actions.remove(&id.0) {
-            for (kind, bytes, received) in terra_transport::drain_control_actions(&mut queue) {
+            for (kind, bytes, received) in
+                zorvane_browser_protocol::drain_control_actions(&mut queue)
+            {
                 match kind.as_str() {
                     "autonomy" => {
                         if let Some(r) = decode_level(&bytes) {
@@ -1808,8 +1768,8 @@ fn drive_autonomy(
             let _ = r.record(event);
         }
         if due || output.reset_controller {
-            let utc = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            let utc = web_time::SystemTime::now()
+                .duration_since(web_time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs_f64();
             let mut outgoing = bridge.shared.outgoing.lock().unwrap();
@@ -1890,7 +1850,7 @@ fn drive_autonomy(
     runtime.occupancy_gates.retain(|id, _| seen.contains(id));
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native"))]
 mod autonomy_integration_tests {
     use super::*;
     #[test]
