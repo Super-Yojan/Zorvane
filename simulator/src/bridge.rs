@@ -37,6 +37,15 @@ pub struct BridgeConfig {
     pub prefix: String,
     #[cfg(feature = "native")]
     pub listen: String,
+    /// Comma-separated locators, already split. Empty means no fleet session.
+    #[cfg(feature = "native")]
+    pub connect: Vec<String>,
+    #[cfg(feature = "native")]
+    pub user: Option<String>,
+    #[cfg(feature = "native")]
+    pub password: Option<String>,
+    #[cfg(feature = "native")]
+    pub tls_root_ca: Option<String>,
     #[cfg(feature = "native")]
     pub config_file: Option<String>,
     pub frame_rate: f32,
@@ -49,6 +58,14 @@ impl Default for BridgeConfig {
             prefix: "terra/rover".into(),
             #[cfg(feature = "native")]
             listen: "tcp/127.0.0.1:7447".into(),
+            #[cfg(feature = "native")]
+            connect: Vec::new(),
+            #[cfg(feature = "native")]
+            user: None,
+            #[cfg(feature = "native")]
+            password: None,
+            #[cfg(feature = "native")]
+            tls_root_ca: None,
             #[cfg(feature = "native")]
             config_file: None,
             frame_rate: 10.0,
@@ -65,7 +82,15 @@ impl BridgeConfig {
             listen: std::env::var("TERRA_ZENOH_LISTEN")
                 .unwrap_or_else(|_| "tcp/127.0.0.1:7447".into()),
             #[cfg(feature = "native")]
-            config_file: std::env::var("TERRA_ZENOH_CONFIG").ok(),
+            connect: split_endpoints(&std::env::var("TERRA_ZENOH_CONNECT").unwrap_or_default()),
+            #[cfg(feature = "native")]
+            user: nonempty_env("TERRA_ZENOH_USER", true),
+            #[cfg(feature = "native")]
+            password: nonempty_env("TERRA_ZENOH_PASSWORD", false),
+            #[cfg(feature = "native")]
+            tls_root_ca: nonempty_env("TERRA_ZENOH_TLS_ROOT_CA", true),
+            #[cfg(feature = "native")]
+            config_file: nonempty_env("TERRA_ZENOH_CONFIG", true),
             ..default()
         }
     }
@@ -80,20 +105,171 @@ impl BridgeConfig {
         if !zorvane_browser_protocol::valid_topic(&self.prefix, false) {
             return Err("prefix must be a concrete Zenoh key expression");
         }
+        #[cfg(feature = "native")]
+        if self.config_path().is_none() {
+            self.link_specs()?;
+        }
         Ok(())
     }
     #[cfg(feature = "native")]
-    fn session_config(&self) -> zenoh::Result<zenoh::Config> {
-        if let Some(path) = &self.config_file {
-            return zenoh::Config::from_file(path);
+    fn config_path(&self) -> Option<&str> {
+        self.config_file
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+    }
+    /// Local peer, then optional fleet client. `TERRA_ZENOH_CONFIG` replaces both.
+    #[cfg(all(test, feature = "native"))]
+    fn built_configs(&self) -> Result<Vec<zenoh::Config>, String> {
+        if let Some(path) = self.config_path() {
+            return zenoh::Config::from_file(path)
+                .map(|config| vec![config])
+                .map_err(|error| error.to_string());
         }
+        let (local, fleet) = self.link_specs().map_err(str::to_string)?;
+        local
+            .into_iter()
+            .chain(fleet)
+            .map(|spec| spec.to_zenoh_config().map_err(|error| error.to_string()))
+            .collect()
+    }
+    /// The listener stays a separate peer. Zenoh usrpwd covers every link on a
+    /// session, so fleet credentials never share that listener.
+    #[cfg(feature = "native")]
+    fn link_specs(&self) -> Result<(Option<ZenohLinkSpec>, Option<ZenohLinkSpec>), &'static str> {
+        let listen = trimmed(&self.listen);
+        let connect: Vec<String> = self
+            .connect
+            .iter()
+            .filter_map(|endpoint| trimmed(endpoint))
+            .collect();
+        let user = self
+            .user
+            .as_deref()
+            .map(str::trim)
+            .filter(|user| !user.is_empty());
+        let password = self
+            .password
+            .as_deref()
+            .filter(|password| !password.is_empty());
+        let tls_root_ca = self.tls_root_ca.as_deref().and_then(trimmed);
+        match (user, password) {
+            (None, None) => {}
+            (Some(_), Some(_)) => {
+                if connect.is_empty() {
+                    return Err("TERRA_ZENOH_CONNECT is required when TERRA_ZENOH_USER is set");
+                }
+            }
+            _ => {
+                return Err("TERRA_ZENOH_USER and TERRA_ZENOH_PASSWORD must both be set");
+            }
+        }
+        if tls_root_ca.is_some() && connect.is_empty() {
+            return Err("TERRA_ZENOH_TLS_ROOT_CA requires TERRA_ZENOH_CONNECT");
+        }
+        for endpoint in listen.iter().chain(&connect) {
+            if !valid_locator(endpoint) {
+                return Err("Zenoh endpoints must be tcp/ or tls/ locators");
+            }
+        }
+        if listen.is_none() && connect.is_empty() {
+            return Err("set TERRA_ZENOH_LISTEN or TERRA_ZENOH_CONNECT");
+        }
+        let local = listen.map(|listen| ZenohLinkSpec {
+            mode: "peer",
+            listen: vec![listen],
+            connect: Vec::new(),
+            user: None,
+            password: None,
+            tls_root_ca: None,
+            exit_on_connect_failure: false,
+        });
+        let fleet = if connect.is_empty() {
+            None
+        } else {
+            Some(ZenohLinkSpec {
+                mode: "client",
+                listen: Vec::new(),
+                connect,
+                user: user.map(str::to_owned),
+                password: password.map(str::to_owned),
+                tls_root_ca,
+                exit_on_connect_failure: true,
+            })
+        };
+        Ok((local, fleet))
+    }
+}
+#[cfg(feature = "native")]
+fn nonempty_env(key: &str, trim: bool) -> Option<String> {
+    let value = std::env::var(key).ok()?;
+    let value = if trim { value.trim().to_owned() } else { value };
+    (!value.is_empty()).then_some(value)
+}
+#[cfg(feature = "native")]
+fn split_endpoints(value: &str) -> Vec<String> {
+    value.split(',').filter_map(trimmed).collect()
+}
+#[cfg(feature = "native")]
+fn trimmed(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+#[cfg(feature = "native")]
+fn valid_locator(endpoint: &str) -> bool {
+    (endpoint.starts_with("tcp/") || endpoint.starts_with("tls/"))
+        && endpoint.parse::<zenoh::config::EndPoint>().is_ok()
+}
+/// One Zenoh session. The fleet client is a second spec when `connect` is set.
+#[cfg(feature = "native")]
+struct ZenohLinkSpec {
+    mode: &'static str,
+    listen: Vec<String>,
+    connect: Vec<String>,
+    user: Option<String>,
+    password: Option<String>,
+    tls_root_ca: Option<String>,
+    exit_on_connect_failure: bool,
+}
+#[cfg(feature = "native")]
+impl ZenohLinkSpec {
+    fn to_zenoh_config(&self) -> zenoh::Result<zenoh::Config> {
         let mut config = zenoh::Config::default();
-        config.insert_json5("mode", "\"peer\"")?;
-        config.insert_json5(
-            "listen/endpoints",
-            &serde_json::json!([self.listen]).to_string(),
-        )?;
+        config.insert_json5("mode", &format!("\"{}\"", self.mode))?;
+        if !self.listen.is_empty() {
+            config.insert_json5(
+                "listen/endpoints",
+                &serde_json::to_string(&self.listen).expect("listen endpoints"),
+            )?;
+        }
+        if !self.connect.is_empty() {
+            config.insert_json5(
+                "connect/endpoints",
+                &serde_json::to_string(&self.connect).expect("connect endpoints"),
+            )?;
+        }
         config.insert_json5("scouting/multicast/enabled", "false")?;
+        if self.exit_on_connect_failure {
+            // Client mode already returns the connect error. Keep that if defaults change.
+            config.insert_json5("connect/exit_on_failure", "true")?;
+        }
+        if let (Some(user), Some(password)) = (&self.user, &self.password) {
+            config.insert_json5(
+                "transport/auth/usrpwd/user",
+                &serde_json::to_string(user).expect("user"),
+            )?;
+            config.insert_json5(
+                "transport/auth/usrpwd/password",
+                &serde_json::to_string(password).expect("password"),
+            )?;
+        }
+        // Zenoh 1.10 TLS clients load webpki roots either way. A set CA is appended.
+        if let Some(ca) = &self.tls_root_ca {
+            config.insert_json5(
+                "transport/link/tls/root_ca_certificate",
+                &serde_json::to_string(ca).expect("root ca"),
+            )?;
+        }
         Ok(config)
     }
 }
@@ -689,6 +865,238 @@ fn publish_frames(
 #[cfg(all(test, feature = "native"))]
 mod tests {
     use super::*;
+
+    fn json_at(config: &zenoh::Config, key: &str) -> serde_json::Value {
+        serde_json::from_str(
+            &config
+                .get_json(key)
+                .unwrap_or_else(|_| panic!("missing {key}")),
+        )
+        .unwrap()
+    }
+
+    fn configs(config: BridgeConfig) -> Vec<zenoh::Config> {
+        config.built_configs().unwrap()
+    }
+
+    #[test]
+    fn default_session_only_listens_on_localhost() {
+        let built = configs(BridgeConfig::default());
+        assert_eq!(built.len(), 1);
+        assert_eq!(json_at(&built[0], "mode"), "peer");
+        assert_eq!(
+            json_at(&built[0], "listen/endpoints"),
+            serde_json::json!(["tcp/127.0.0.1:7447"])
+        );
+        assert_eq!(
+            json_at(&built[0], "connect/endpoints"),
+            serde_json::json!([])
+        );
+        assert_eq!(json_at(&built[0], "scouting/multicast/enabled"), false);
+        assert_eq!(
+            json_at(&built[0], "transport/auth/usrpwd/user"),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            json_at(&built[0], "transport/link/tls/root_ca_certificate"),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn connect_keeps_a_separate_local_listener() {
+        let built = configs(BridgeConfig {
+            connect: split_endpoints(
+                " tcp/10.0.0.8:7447, ,tls/argos.34.135.204.210.sslip.io:7448 ",
+            ),
+            ..default()
+        });
+        assert_eq!(built.len(), 2);
+        assert_eq!(json_at(&built[0], "mode"), "peer");
+        assert_eq!(
+            json_at(&built[0], "listen/endpoints"),
+            serde_json::json!(["tcp/127.0.0.1:7447"])
+        );
+        assert_eq!(
+            json_at(&built[0], "connect/endpoints"),
+            serde_json::json!([])
+        );
+        assert_eq!(
+            json_at(&built[0], "transport/auth/usrpwd/password"),
+            serde_json::Value::Null
+        );
+        assert_eq!(json_at(&built[1], "mode"), "client");
+        assert!(
+            !json_at(&built[1], "listen/endpoints")
+                .to_string()
+                .contains("127.0.0.1:7447")
+        );
+        assert_eq!(
+            json_at(&built[1], "connect/endpoints"),
+            serde_json::json!([
+                "tcp/10.0.0.8:7447",
+                "tls/argos.34.135.204.210.sslip.io:7448"
+            ])
+        );
+        assert_eq!(json_at(&built[1], "scouting/multicast/enabled"), false);
+        assert_eq!(json_at(&built[1], "connect/exit_on_failure"), true);
+        assert_eq!(
+            json_at(&built[1], "transport/auth/usrpwd/user"),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            json_at(&built[1], "transport/link/tls/root_ca_certificate"),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn credentials_and_optional_root_ca_stay_on_the_fleet_client() {
+        let built = configs(BridgeConfig {
+            prefix: "terra/phone".into(),
+            connect: vec!["tls/argos.34.135.204.210.sslip.io:7448".into()],
+            user: Some("terra".into()),
+            password: Some("not-the-fleet-password".into()),
+            tls_root_ca: Some("/tmp/extra-ca.pem".into()),
+            ..default()
+        });
+        assert_eq!(built.len(), 2);
+        assert_eq!(
+            json_at(&built[0], "transport/auth/usrpwd/user"),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            json_at(&built[0], "transport/auth/usrpwd/password"),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            json_at(&built[0], "transport/link/tls/root_ca_certificate"),
+            serde_json::Value::Null
+        );
+        assert_eq!(json_at(&built[1], "transport/auth/usrpwd/user"), "terra");
+        assert_eq!(
+            json_at(&built[1], "transport/auth/usrpwd/password"),
+            "not-the-fleet-password"
+        );
+        assert_eq!(
+            json_at(&built[1], "transport/link/tls/root_ca_certificate"),
+            "/tmp/extra-ca.pem"
+        );
+        assert_eq!(
+            json_at(&built[1], "connect/endpoints"),
+            serde_json::json!(["tls/argos.34.135.204.210.sslip.io:7448"])
+        );
+    }
+
+    #[test]
+    fn empty_listen_is_a_fleet_client_only() {
+        let built = configs(BridgeConfig {
+            listen: "  ".into(),
+            connect: vec!["tcp/127.0.0.1:7449".into()],
+            ..default()
+        });
+        assert_eq!(built.len(), 1);
+        assert_eq!(json_at(&built[0], "mode"), "client");
+        assert_eq!(
+            json_at(&built[0], "connect/endpoints"),
+            serde_json::json!(["tcp/127.0.0.1:7449"])
+        );
+    }
+
+    #[test]
+    fn config_file_replaces_listen_connect_and_credentials() {
+        let path =
+            std::env::temp_dir().join(format!("zorvane-zenoh-config-{}.json5", std::process::id()));
+        std::fs::write(
+            &path,
+            r#"{ mode: "client", connect: { endpoints: ["tcp/127.0.0.1:9"] } }"#,
+        )
+        .unwrap();
+        let built = configs(BridgeConfig {
+            listen: "not-a-locator".into(),
+            connect: vec!["tls/argos.34.135.204.210.sslip.io:7448".into()],
+            user: Some("terra".into()),
+            password: Some("not-the-fleet-password".into()),
+            config_file: Some(path.display().to_string()),
+            ..default()
+        });
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(built.len(), 1);
+        assert_eq!(json_at(&built[0], "mode"), "client");
+        assert_eq!(
+            json_at(&built[0], "connect/endpoints"),
+            serde_json::json!(["tcp/127.0.0.1:9"])
+        );
+        assert_eq!(
+            json_at(&built[0], "transport/auth/usrpwd/user"),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            json_at(&built[0], "transport/auth/usrpwd/password"),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn link_spec_rejects_incomplete_or_invalid_endpoints() {
+        let err = |config: BridgeConfig| match config.link_specs() {
+            Err(error) => error,
+            Ok(_) => panic!("expected a Zenoh configuration error"),
+        };
+        assert_eq!(
+            err(BridgeConfig {
+                user: Some("terra".into()),
+                ..default()
+            }),
+            "TERRA_ZENOH_USER and TERRA_ZENOH_PASSWORD must both be set"
+        );
+        assert_eq!(
+            err(BridgeConfig {
+                password: Some("not-the-fleet-password".into()),
+                ..default()
+            }),
+            "TERRA_ZENOH_USER and TERRA_ZENOH_PASSWORD must both be set"
+        );
+        assert_eq!(
+            err(BridgeConfig {
+                user: Some("terra".into()),
+                password: Some("not-the-fleet-password".into()),
+                ..default()
+            }),
+            "TERRA_ZENOH_CONNECT is required when TERRA_ZENOH_USER is set"
+        );
+        assert_eq!(
+            err(BridgeConfig {
+                tls_root_ca: Some("/tmp/extra-ca.pem".into()),
+                ..default()
+            }),
+            "TERRA_ZENOH_TLS_ROOT_CA requires TERRA_ZENOH_CONNECT"
+        );
+        assert_eq!(
+            err(BridgeConfig {
+                listen: String::new(),
+                ..default()
+            }),
+            "set TERRA_ZENOH_LISTEN or TERRA_ZENOH_CONNECT"
+        );
+        assert_eq!(
+            err(BridgeConfig {
+                connect: vec!["udp/127.0.0.1:7447".into()],
+                ..default()
+            }),
+            "Zenoh endpoints must be tcp/ or tls/ locators"
+        );
+        assert!(
+            BridgeConfig {
+                config_file: Some("/tmp/ignored-because-validate-skips-specs.json5".into()),
+                listen: "not-a-locator".into(),
+                ..default()
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
     #[test]
     fn shared_handler_validates_routes_and_disconnect_discards_intents() {
         let shared = Shared::default();
