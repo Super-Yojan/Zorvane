@@ -50,7 +50,7 @@ Headless. Port `7447` is published on `127.0.0.1` only.
 
 ## Zenoh peer
 
-The simulator listens as a Zenoh peer on `tcp/127.0.0.1:7447`. It does not start a separate router. The prefix is `terra/rover`.
+The simulator listens as a Zenoh peer on `tcp/127.0.0.1:7447`. It does not start a separate router. The prefix is `terra/rover`. A fleet router is a second session; see [Hosted ARGOS fleet](#hosted-argos-fleet).
 
 ```sh
 python3 -m pip install -e 'clients/python[native]'
@@ -119,6 +119,45 @@ python3 simulator/tools/zenoh_client.py --rover 0 frames --output /tmp/terra-fra
 
 For a client on another computer, set the listener to `tcp/0.0.0.0:7447` and pass `--endpoint tcp/SIMULATOR_IP:7447`. Key names: [Zenoh](../reference/zenoh.md).
 
+## Hosted ARGOS fleet
+
+Student programs stay on the [browser client](../browser-client.md). This session is the desktop simulator joining the hosted fleet router.
+
+The ARGOS `codex/browser-dashboard` host runs a Zenoh router at `tls/argos.34.135.204.210.sslip.io:7448`. Caddy obtains a public Let's Encrypt certificate for that name, and `packaging/gcp/refresh-router-tls.sh` copies it onto the router. The router also listens on `tcp/127.0.0.1:7449` for the local ARGOS server. Multicast scouting is off. Clients use usrpwd. The fleet user is `terra`, and the key prefix is `terra/phone`.
+
+Zenoh 1.10 TLS clients load the webpki root set, then append `transport/link/tls/root_ca_certificate` when that path is set. The public certificate needs no extra CA. Set `TERRA_ZENOH_TLS_ROOT_CA` only to add a private CA file.
+
+`TERRA_ZENOH_CONNECT` is a comma-separated locator list. It opens a client session. `TERRA_ZENOH_USER` and `TERRA_ZENOH_PASSWORD` are applied only on that session. Zenoh usrpwd covers every link of a session, so the local peer keeps listening on `TERRA_ZENOH_LISTEN` without a password. A failed fleet connect leaves the peer running. An empty `TERRA_ZENOH_LISTEN` skips the peer. `TERRA_ZENOH_CONFIG` still replaces the session config and ignores connect, user, password, and the CA path.
+
+```sh
+TERRA_ZENOH_PREFIX=terra/phone \
+TERRA_ZENOH_CONNECT=tls/argos.34.135.204.210.sslip.io:7448 \
+TERRA_ZENOH_USER=terra \
+TERRA_ZENOH_PASSWORD='<fleet password>' \
+cargo run -p zorvane
+```
+
+Do not commit the fleet password. On the host it is `/etc/argos/fleet.password`.
+
+Keys the fleet manager uses under that prefix:
+
+| Key | Direction |
+| --- | --- |
+| `terra/phone/fleet/state` | Zorvane publishes |
+| `terra/phone/<id>/pose` | Zorvane publishes |
+| `terra/phone/<id>/goal/status` | Zorvane publishes |
+| `terra/phone/<id>/camera/depth` | Zorvane publishes |
+| `terra/phone/<id>/map/occupancy` | Zorvane publishes |
+| `terra/phone/<id>/autonomy/status` | Zorvane publishes |
+| `terra/phone/<id>/goal` | ARGOS publishes |
+| `terra/phone/<id>/teleop` | ARGOS publishes |
+| `terra/phone/<id>/autonomy` | ARGOS publishes |
+| `terra/phone/<id>/safety` | ARGOS publishes |
+| `terra/phone/<id>/goal/decision` | ARGOS publishes |
+| `terra/phone/<id>/mission/report` | ARGOS publishes |
+
+ARGOS also reads `goal/proposal`, `mission/status`, `experiment/status`, `hardware/status`, `pointcloud`, `search/report`, `search/status`, and `localization` when they are present. It does not publish `cmd_vel` or `fleet/size`.
+
 ## Tests
 
 ```sh
@@ -154,9 +193,13 @@ GPU tests are `#[ignore]`. They write `/tmp/terra-world-preview.png`.
 | `TERRA_MISSION_SEED` | `42` | Landscape seed and rubble seed. |
 | `TERRA_ROVER_COUNT` | `1` | Fleet size, 0 through 32. |
 | `TERRA_ZENOH` | on | `0` disables the bridge. |
-| `TERRA_ZENOH_PREFIX` | `terra/rover` | Topic prefix. |
-| `TERRA_ZENOH_LISTEN` | `tcp/127.0.0.1:7447` | Peer listen endpoint. |
-| `TERRA_ZENOH_CONFIG` | unset | JSON5 file. Replaces the session config. |
+| `TERRA_ZENOH_PREFIX` | `terra/rover` | Topic prefix. Hosted ARGOS uses `terra/phone`. |
+| `TERRA_ZENOH_LISTEN` | `tcp/127.0.0.1:7447` | Local peer endpoint. Empty skips the peer. |
+| `TERRA_ZENOH_CONNECT` | unset | Comma-separated fleet locators. Opens a client session. |
+| `TERRA_ZENOH_USER` | unset | usrpwd user for the fleet session. Requires the password and a connect locator. |
+| `TERRA_ZENOH_PASSWORD` | unset | usrpwd password for the fleet session. Not a command-line flag. |
+| `TERRA_ZENOH_TLS_ROOT_CA` | unset | Optional PEM CA added to Zenoh's webpki roots. Public Let's Encrypt hosts do not need it. |
+| `TERRA_ZENOH_CONFIG` | unset | JSON5 file. Replaces the session config, including connect and credentials. |
 | `TERRA_RUN_DIR` | `runs` | Autonomy JSONL directory. |
 | `TERRA_TRIAL_DESIGN` | `adaptive` | Stored in the run manifest. |
 | `TERRA_ASSIGNED_LEVEL` | unset | JSON string for the arbiter level. |
