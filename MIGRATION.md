@@ -1,6 +1,8 @@
-# Terra follow-up after Zorvane
+# Historical Terra extraction checklist
 
-**TL;DR.** Delete Terra's `simulator/` and simulator `docker/`. Keep TerraPhone, the Pi, and the shared crates. Point world docs here.
+> This is the original extraction checklist, preserved for history. It is not a current instruction to delete files or manage Terra PRs. Check current Terra main and its PR records before using any item below. The current dependency pin is in [Cargo.toml](Cargo.toml), not the extraction revision below.
+
+**Original plan.** Delete Terra's `simulator/` and simulator `docker/`. Keep TerraPhone, the Pi, and the shared crates. Point world docs here.
 
 ![What stays in Terra and what moved](docs/assets/migration.svg)
 

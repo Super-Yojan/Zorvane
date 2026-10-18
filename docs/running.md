@@ -40,4 +40,4 @@ client.set_velocity(0, 0.0, 0.0)
 
 The Rust client has the same calls. See [Browser client](browser-client.md) and [Python client](python-client.md).
 
-Until the WebGPU build is on the project site, the pairing URL explains that the simulator page is not available yet.
+The pairing URL depends on the browser simulator build being available. If the page is unavailable, follow the [native setup](dev/native-zenoh.md) or inspect the browser deployment before retrying.
