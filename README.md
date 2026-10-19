@@ -18,6 +18,14 @@ the Zenoh bridge those operators already speak.
 
 *`TERRA_NEXT=1`. See [simulator/NEXT.md](simulator/NEXT.md).*
 
+## Platform status
+
+ARGOS's current operator path is a React browser interface backed by a Rust Axum server and Zenoh. Its native Swift station is a legacy fallback; Unity is a historical prototype. TerraPhone remains the iOS vehicle runtime. Zorvane owns simulation and the student-client browser pairing workflow; that gateway is separate from the ARGOS server.
+
+The browser operator supports authenticated claims, waypoint send/cancel, arm/disarm, autonomy selection, navigation geometry/tuning, and observed occupancy maps. See the [ARGOS README](https://github.com/Super-Yojan/ARGOS/blob/main/README.md) for current startup and control behavior. Vehicle safety and local autonomy remain in Terra.
+
+Zorvane currently pins the shared Terra runtime to `4b582677386b8ed7d5e430585572b83011ea7fc4`, including A* waypoint routing and L4 target search. Later Terra merges require an explicit dependency update and simulator validation. Shared 3D world / GMU development in local branches or working trees is not part of this main-branch release.
+
 ## Run
 
 Connect a client. It prints a pairing URL. Open that URL on the same computer, choose a world, and press Start.
@@ -64,3 +72,5 @@ GPU render tests are `#[ignore]`.
 What to delete from Terra after this lands: [MIGRATION.md](MIGRATION.md).
 
 Desktop competition with GMU scenery: [NEXT - GMU Stadium setup](simulator/NEXT.md#next---gmu-stadium-desktop).
+=======
+Extraction history and original Terra follow-up checklist: [MIGRATION.md](MIGRATION.md).

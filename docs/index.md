@@ -37,16 +37,20 @@ flowchart LR
   Body["Terra body<br/>terra-ground"]
   World["Zorvane world"]
   Bus["Zenoh<br/>terra/rover"]
-  ARGOS["ARGOS"]
+  ARGOS["ARGOS Rust Axum server"]
+  Web["React operator browser"]
   Phone["TerraPhone"]
 
   Body -->|"VehicleBody"| World
   World <-->|"cameras and commands"| Bus
+  Web <--> ARGOS
   ARGOS <--> Bus
   Phone <--> Bus
 ```
 
-*The body plugs in. Operators use the same keys as a real rover.*
+*The body plugs in. The ARGOS server uses the same Zenoh keys as a real rover; its React browser connects to that server.*
+
+TerraPhone remains the iOS vehicle runtime. The Swift ARGOS station is a legacy fallback, and Unity is a historical prototype. Zorvane browser pairing serves student clients and simulation; it is separate from the ARGOS operator server. Follow [ARGOS](https://github.com/Super-Yojan/ARGOS) for current operator startup.
 
 Shared crates stay in Terra: types, control, waypoint, transport, autonomy. Motors stay there too. The collider and `rover.glb` live here.
 
