@@ -37,6 +37,10 @@ Drive by publishing velocity at least every 500 ms, and send zeros to stop. See 
 
 Desktop, headless, and native Zenoh setups: [docs/dev/native-zenoh.md](docs/dev/native-zenoh.md). The gateway internals: [docs/dev/browser-gateway.md](docs/dev/browser-gateway.md).
 
+Optional standalone [GMU desktop 3D viewer](docs/dev/gmu-viewer.md): explore
+Google Photorealistic 3D Tiles around George Mason Stadium, with your own Map
+Tiles API key. This visual prototype runs separately from NEXT and robot sensors.
+
 ## Test
 
 ```sh
@@ -58,3 +62,5 @@ GPU render tests are `#[ignore]`.
 - Shared crates (`terra-types`, `terra-control`, `terra-waypoint`, `terra-transport`, and the autonomy stack) stay in Terra and are git dependencies pinned in `Cargo.toml`. TerraPhone still compiles them there.
 
 What to delete from Terra after this lands: [MIGRATION.md](MIGRATION.md).
+
+Desktop competition with GMU scenery: [NEXT - GMU Stadium setup](simulator/NEXT.md#next---gmu-stadium-desktop).
