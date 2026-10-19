@@ -37,6 +37,8 @@ Both backends expose `subscribe`, `publish`, `publish_json`, `subscribe_pose`, `
 
 Full bridge mode needs WebGPU. Use a current Chrome or Edge with hardware acceleration enabled. The in-page status line says when WebGPU is missing. The standalone WebGL page at <https://super-yojan.dev/Zorvane/play/> has no network bridge and no voxel hills.
 
+On Linux, Chrome may expose `navigator.gpu` yet return no adapter, causing Bevy to panic with `Unable to find a GPU`. In `chrome://flags`, enable **Unsafe WebGPU** (`#enable-unsafe-webgpu`) and **Vulkan** (`#enable-vulkan`), then fully restart Chrome and reopen a fresh pairing URL. Confirm in the page console with `await navigator.gpu.requestAdapter()`; it should return a `GPUAdapter`, not `null`. The `http://127.0.0.1` pairing origin is valid for WebGPU. See [Chrome's WebGPU troubleshooting guide](https://developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips).
+
 `rover.glb` is about 118 MB, so the mesh appears after that download. The elevation view uses the bundled Terrarium PNG.
 
 ## Local Trunk

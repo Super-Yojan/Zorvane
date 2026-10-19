@@ -289,6 +289,15 @@ pub(crate) fn reconcile_fleet(
             .as_ref()
             .map(|vehicles| vehicles.0.active().display_name())
             .unwrap_or(zorvane_vehicle::TerraGround.display_name());
+        let crab_trap = vehicles
+            .as_ref()
+            .is_some_and(|vehicles| vehicles.0.active().id() == "crab-trap-bot");
+        let body = RoverBody::new(&physics);
+        let body = if crab_trap {
+            body.with_front_intake(physics.chassis_size)
+        } else {
+            body
+        };
         let mut rover = commands.spawn((
             Name::new(format!("{label} {}", id.0)),
             Rover,
@@ -297,7 +306,7 @@ pub(crate) fn reconcile_fleet(
             DriveCommand::default(),
             WheelSpeeds::default(),
             Odometry::default(),
-            RoverBody::new(&physics),
+            body,
             Transform::from_translation(offset + Vec3::Y * (physics.chassis_size.y / 2.0 + 0.02))
                 .with_rotation(if next_field {
                     crate::next_competition::rover_spawn(slot, fleet_count, physics.chassis_size).1
@@ -307,6 +316,9 @@ pub(crate) fn reconcile_fleet(
         ));
         if slot == 0 {
             rover.insert(KeyboardControlled);
+        }
+        if crab_trap && next_field {
+            rover.insert(crate::next_competition::CarriedBalls::default());
         }
         if let Some(assets) = &assets {
             rover.with_children(|parent| {

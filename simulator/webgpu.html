@@ -24,13 +24,32 @@
     <p id="bridge-status" role="status" aria-live="polite">Loading WebGPU simulator.</p>
     <script>
       const bridgeStatus = document.getElementById("bridge-status");
+      let adapterUnavailable = false;
       if (!navigator.gpu) {
         bridgeStatus.textContent = "WebGPU is unavailable in this browser.";
-      } else if (!location.hash.includes("endpoint=")) {
-        bridgeStatus.textContent = "Client connection inactive. Open the pairing URL printed by the Zorvane client.";
+      } else {
+        navigator.gpu.requestAdapter().then((adapter) => {
+          if (!adapter) {
+            adapterUnavailable = true;
+            bridgeStatus.textContent = "WebGPU is enabled, but Chrome could not provide a GPU adapter. Check chrome://gpu and your graphics driver.";
+          }
+        }).catch((error) => {
+          adapterUnavailable = true;
+          bridgeStatus.textContent = `WebGPU adapter request failed: ${error.message || error}`;
+        });
+        if (!location.hash.includes("endpoint=")) {
+          bridgeStatus.textContent = "Client connection inactive. Open the pairing URL printed by the Zorvane client.";
+        }
       }
-      window.addEventListener("error", () => {
-        bridgeStatus.textContent = "Simulator startup failed. Check WebGPU support and the browser console, then reload the pairing URL.";
+      window.addEventListener("error", (event) => {
+        if (adapterUnavailable) return;
+        const detail = event.message || "Unknown browser error";
+        bridgeStatus.textContent = `Simulator startup failed: ${detail}. Check the browser console, then reload the pairing URL.`;
+      });
+      window.addEventListener("unhandledrejection", (event) => {
+        if (adapterUnavailable) return;
+        const detail = event.reason?.message || String(event.reason || "Unknown browser error");
+        bridgeStatus.textContent = `Simulator startup failed: ${detail}. Check the browser console, then reload the pairing URL.`;
       });
     </script>
   </body>

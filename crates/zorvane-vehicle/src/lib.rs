@@ -129,6 +129,43 @@ impl VehicleBody for TerraGround {
     }
 }
 
+/// Simplified CrabTrapBot CAD visual. Its STEP coordinates are millimetres;
+/// the GLB is centered on its bounds before the visual scale is applied.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CrabTrapBot;
+
+impl VehicleBody for CrabTrapBot {
+    fn id(&self) -> &'static str {
+        "crab-trap-bot"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "CrabTrapBot"
+    }
+
+    fn visual(&self) -> VehicleVisual {
+        VehicleVisual {
+            asset_path: "models/crab_trap_bot_sim.glb",
+        }
+    }
+
+    fn chassis(&self) -> ChassisSpec {
+        ChassisSpec {
+            // Bounds of the centered GLB, rounded up to millimetres.
+            size_xyz: [0.607, 0.614, 0.601],
+            // Provisional until the CrabTrapBot hardware dimensions are measured.
+            mass_kg: 20.0,
+            visual_scale: 0.001,
+        }
+    }
+
+    fn locomotion(&self) -> Locomotion {
+        // Retain Terra's differential-drive parameters until the new wheel
+        // radius, track, and motor limits are measured.
+        TerraGround.locomotion()
+    }
+}
+
 /// Bodies Zorvane can spawn. The binary registers built-ins, then selects one.
 pub struct VehicleRegistry {
     bodies: Vec<Box<dyn VehicleBody>>,
@@ -167,6 +204,7 @@ impl VehicleRegistry {
     pub fn from_id(id: Option<&str>) -> Result<Self, String> {
         let mut registry = Self::new();
         registry.register(Box::new(TerraGround));
+        registry.register(Box::new(CrabTrapBot));
         registry.select(id.unwrap_or(TerraGround.id()))?;
         Ok(registry)
     }
@@ -255,6 +293,16 @@ mod tests {
         assert!(size[0] > 0.40 && size[0] < 0.41, "{size:?}");
         assert!(size[1] > 0.14 && size[1] < 0.15, "{size:?}");
         assert!(size[2] > 0.38 && size[2] < 0.39, "{size:?}");
+    }
+
+    #[test]
+    fn crab_trap_bot_uses_simplified_millimetre_visual() {
+        let registry = VehicleRegistry::from_id(Some("crab-trap-bot")).unwrap();
+        let body = registry.active();
+        assert_eq!(body.visual().asset_path, "models/crab_trap_bot_sim.glb");
+        assert_eq!(body.chassis().visual_scale, 0.001);
+        assert_eq!(body.chassis().size_xyz, [0.607, 0.614, 0.601]);
+        assert!(body.locomotion().differential().is_ok());
     }
 
     #[test]

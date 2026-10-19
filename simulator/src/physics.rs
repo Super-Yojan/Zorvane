@@ -94,6 +94,31 @@ impl RoverBody {
             ccd: SweptCcd::default(),
         }
     }
+
+    /// Open-front chassis frame for the CrabTrapBot intake. Balls can roll
+    /// between the rails; the rear crossbar still blocks them physically.
+    pub fn with_front_intake(mut self, size: Vec3) -> Self {
+        let rail = 0.055;
+        let back = 0.065;
+        self.collider = Collider::compound(vec![
+            (
+                Position::from_xyz(-(size.x - rail) * 0.5, 0.0, 0.0),
+                Rotation::default(),
+                Collider::cuboid(rail, size.y, size.z),
+            ),
+            (
+                Position::from_xyz((size.x - rail) * 0.5, 0.0, 0.0),
+                Rotation::default(),
+                Collider::cuboid(rail, size.y, size.z),
+            ),
+            (
+                Position::from_xyz(0.0, 0.0, (size.z - back) * 0.5),
+                Rotation::default(),
+                Collider::cuboid(size.x, size.y, back),
+            ),
+        ]);
+        self
+    }
 }
 
 impl Default for RoverBody {
