@@ -1,6 +1,6 @@
 # NEXT competition practice
 
-**TL;DR.** `TERRA_NEXT=1` loads a full soccer pitch. Zatara is rover 0 on `terra-ground`. Six tennis balls. Twenty open 5-gallon buckets. No scoring. Select `crab-trap-bot` to collect balls through its front opening.
+**TL;DR.** `TERRA_NEXT=1` loads a full soccer pitch. Zatara is rover 0 on `terra-ground`. Six tennis balls. Twenty open 5-gallon buckets. Select `crab-trap-bot` to collect balls through its front opening and score them with operator clicks at the goal.
 
 ![NEXT pitch](../docs/assets/next.png)
 
@@ -47,7 +47,11 @@ To practice collecting with the updated model:
 TERRA_NEXT=1 TERRA_ZENOH=0 ZORVANE_VEHICLE=crab-trap-bot cargo run -p zorvane
 ```
 
-The CrabTrapBot has an open-front collision frame. A ball entering the low, central intake is moved into a visible holding area inside the rover. The two simplified flap visuals swing inward as a ball approaches and return closed afterward. This is a one-way collection approximation: the STEP model's actual panel geometry, hinge torque, ball contacts with the panels, release into buckets, and scoring are not modeled. Other vehicles continue to push balls.
+The CrabTrapBot has an open-front collision frame. A ball entering the low, central intake is moved into a visible holding area inside the rover. The two simplified flap visuals swing inward as a ball approaches and return closed afterward. Other vehicles continue to push balls.
+
+Each NEXT rover has an onboard ball count in the upper-right status panel. A rover carrying balls returns to the goal where it spawned (even-numbered slots at the south goal, odd-numbered slots at the north goal). Inside the goal mouth, within 1 metre of its goal line, it stops and displays an orange attention marker. Its status row turns orange and says **CLICK TO SCORE**. Click the rover in the 3D view, or its status row, once per ball. Each click removes one onboard ball and adds one to the team score. Empty rover clicks do nothing. After the last click the marker clears and the rover can drive again.
+
+This remains a one-way collection and operator-scoring approximation: the STEP model's exact panel geometry, hinge torque, physical ball contact with panels, and release into buckets are not modeled. The team's score represents confirmed operator clicks, not balls physically deposited in buckets.
 
 Startup prints a `Terra NEXT:` line with the ball and bucket counts.
 
@@ -100,7 +104,7 @@ TERRA_NEXT_GMU=1 TERRA_ZENOH=0 cargo run -p zorvane --bin zorvane --features gmu
 **F6** switches between stadium overview and rover follow. **W/A/S/D** drives;
 **Space** stops. **Escape** opens the pause menu, where Restart and Load world
 rebuild the competition and detach old scenery. The preset starts in overview.
-The existing NEXT scene has no automatic scoring or competition referee.
+The NEXT score advances only through operator clicks at a rover's home goal; there is no automatic competition referee.
 
 ### Visual scenery and robot data
 

@@ -112,6 +112,7 @@ type ControlledRovers<'w, 's> = Query<
     's,
     (
         &'static DriveCommand,
+        Option<&'static crate::next_competition::RoverBallLoad>,
         Option<&'static AutonomyMotorGate>,
         &'static Rotation,
         &'static Position,
@@ -132,7 +133,7 @@ fn control_and_apply(
     mut rovers: ControlledRovers<'_, '_>,
 ) {
     if !config.enabled {
-        for (_, _, _, _, _, _, _, mut force, mut torque, _, _) in &mut rovers {
+        for (_, _, _, _, _, _, _, _, mut force, mut torque, _, _) in &mut rovers {
             force.0 = Vec3::ZERO;
             torque.0 = Vec3::ZERO;
         }
@@ -145,6 +146,7 @@ fn control_and_apply(
     }
     for (
         request,
+        load,
         gate,
         rotation,
         position,
@@ -191,16 +193,17 @@ fn control_and_apply(
             });
             brain.last_vio = Some(t);
         }
-        if gate.is_some_and(|g| g.reset || g.hold) {
+        let waiting = load.is_some_and(|load| load.waiting > 0);
+        if waiting || gate.is_some_and(|g| g.reset || g.hold) {
             brain.controller.reset();
         }
         let _ = brain.controller.set_target(VelocityTarget {
             timestamp: t,
-            forward: request.linear as f64,
-            yaw_rate: request.angular as f64,
+            forward: if waiting { 0.0 } else { request.linear as f64 },
+            yaw_rate: if waiting { 0.0 } else { request.angular as f64 },
         });
         let estimate = brain.estimator.estimate(t);
-        let output = if gate.is_some_and(|g| g.hold) {
+        let output = if waiting || gate.is_some_and(|g| g.hold) {
             MotorOutput::stopped(StopReason::SensorNotReady)
         } else {
             brain.controller.step(estimate)
