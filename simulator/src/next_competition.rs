@@ -76,8 +76,8 @@ pub fn install(app: &mut App) {
         .world()
         .get_resource::<crate::session::SimSession>()
         .is_some_and(|session| session.phase == crate::session::Phase::Menu);
-    app.add_systems(Update, name_zatara)
-        .add_systems(FixedUpdate, settle_deposits);
+    app.add_systems(Update, (name_zatara, setup_crab_traps))
+        .add_systems(FixedUpdate, (settle_deposits, collect_crab_trap_balls));
     if enabled() && !menu {
         app.add_systems(Startup, spawn_field);
     }
@@ -295,6 +295,17 @@ pub struct NextField;
 pub struct PitchSurface;
 #[derive(Component)]
 pub struct TennisBall;
+/// Number of NEXT balls held behind a CrabTrapBot's one-way entrance.
+#[derive(Component, Default)]
+pub struct CarriedBalls(pub usize);
+#[derive(Component)]
+struct TrapInstalled;
+#[derive(Component)]
+struct TrapFlap {
+    side: f32,
+}
+#[derive(Component)]
+struct CarriedBall;
 #[derive(Component)]
 pub struct PitchBoard;
 /// Primary rover in the NEXT scene.
@@ -627,6 +638,113 @@ fn name_zatara(
     }
 }
 
+/// A visible pair of vertical hinges at the intake. Their travel is limited
+/// to the rover interior (+Z); the collection rule below holds balls there.
+fn setup_crab_traps(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    rovers: Query<(Entity, &CarriedBalls), Without<TrapInstalled>>,
+) {
+    if rovers.is_empty() {
+        return;
+    }
+    let flap_mesh = meshes.add(Cuboid::new(0.205, 0.12, 0.012));
+    let flap_material = materials.add(Color::srgb(0.18, 0.22, 0.25));
+    for (rover, _) in &rovers {
+        commands
+            .entity(rover)
+            .insert(TrapInstalled)
+            .with_children(|parent| {
+                for side in [-1.0_f32, 1.0] {
+                    parent
+                        .spawn((
+                            Name::new(if side < 0.0 {
+                                "Left intake hinge"
+                            } else {
+                                "Right intake hinge"
+                            }),
+                            TrapFlap { side },
+                            Transform::from_xyz(side * 0.205, -0.237, -0.298),
+                        ))
+                        .with_children(|hinge| {
+                            hinge.spawn((
+                                Mesh3d(flap_mesh.clone()),
+                                MeshMaterial3d(flap_material.clone()),
+                                Transform::from_xyz(-side * 0.1025, 0.0, 0.0),
+                            ));
+                        });
+                }
+            });
+    }
+}
+
+fn in_front_intake(local: Vec3) -> bool {
+    local.x.abs() <= 0.17
+        && local.y >= -0.31
+        && local.y <= -0.19
+        && local.z >= -0.33
+        && local.z <= -0.19
+}
+
+fn collect_crab_trap_balls(
+    mut commands: Commands,
+    mut rovers: Query<(Entity, &Position, &Rotation, &mut CarriedBalls), With<crate::terra::Rover>>,
+    balls: Query<
+        (
+            Entity,
+            &Position,
+            &Mesh3d,
+            &MeshMaterial3d<StandardMaterial>,
+        ),
+        With<TennisBall>,
+    >,
+    mut flaps: Query<(&TrapFlap, &ChildOf, &mut Transform)>,
+) {
+    let mut claimed = std::collections::HashSet::new();
+    for (rover, position, rotation, mut carried) in &mut rovers {
+        let mut open = false;
+        for (ball, ball_position, mesh, material) in &balls {
+            let local = rotation.0.inverse() * (ball_position.0 - position.0);
+            if local.x.abs() < 0.22
+                && local.y >= -0.33
+                && local.y < -0.17
+                && local.z >= -0.43
+                && local.z <= -0.18
+            {
+                open = true;
+            }
+            if !in_front_intake(local) || !claimed.insert(ball) {
+                continue;
+            }
+            let slot = carried.0;
+            carried.0 += 1;
+            commands.entity(ball).despawn();
+            commands.entity(rover).with_children(|parent| {
+                parent.spawn((
+                    Name::new(format!("Collected tennis ball {}", slot + 1)),
+                    CarriedBall,
+                    Mesh3d(mesh.0.clone()),
+                    MeshMaterial3d(material.0.clone()),
+                    Transform::from_xyz(
+                        (slot % 4) as f32 * 0.075 - 0.1125,
+                        -0.267 + (slot / 16) as f32 * 0.07,
+                        -0.08 + ((slot / 4) % 4) as f32 * 0.075,
+                    ),
+                ));
+            });
+        }
+        for (flap, parent, mut transform) in &mut flaps {
+            if parent.parent() == rover {
+                let target = if open { flap.side * 1.05 } else { 0.0 };
+                let current = transform.rotation.to_euler(EulerRot::YXZ).0;
+                let next = current + (target - current).clamp(-0.15, 0.15);
+                transform.rotation = Quat::from_rotation_y(next);
+            }
+        }
+    }
+}
+
 /// Draws a ball that has crossed a bucket mouth toward the back wall so it stays deposited.
 fn settle_deposits(
     time: Res<Time<Fixed>>,
@@ -667,6 +785,47 @@ mod tests {
     use bevy::{asset::AssetPlugin, mesh::MeshPlugin, time::TimeUpdateStrategy};
     use std::time::Duration;
     use zorvane_vehicle::VehicleBody;
+
+    #[test]
+    fn trap_accepts_ground_ball_only_through_front_opening() {
+        assert!(in_front_intake(Vec3::new(0.0, -0.287, -0.25)));
+        assert!(!in_front_intake(Vec3::new(0.20, -0.287, -0.25)));
+        assert!(!in_front_intake(Vec3::new(0.0, -0.287, 0.25)));
+        assert!(!in_front_intake(Vec3::new(0.0, 0.0, -0.25)));
+    }
+
+    #[test]
+    fn crab_trap_carries_front_ball_but_leaves_rear_ball_on_pitch() {
+        let mut app = App::new();
+        app.add_systems(FixedUpdate, collect_crab_trap_balls);
+        let rover = app
+            .world_mut()
+            .spawn((
+                Rover,
+                Position(Vec3::new(0.0, 0.32, 0.0)),
+                Rotation::default(),
+                CarriedBalls::default(),
+            ))
+            .id();
+        let spawn_ball = |app: &mut App, z| {
+            app.world_mut()
+                .spawn((
+                    TennisBall,
+                    Position(Vec3::new(0.0, TENNIS_BALL_RADIUS, z)),
+                    Mesh3d(Handle::<Mesh>::default()),
+                    MeshMaterial3d(Handle::<StandardMaterial>::default()),
+                ))
+                .id()
+        };
+        let front = spawn_ball(&mut app, -0.25);
+        let rear = spawn_ball(&mut app, 0.25);
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(app.world().get_entity(front).is_err());
+        assert!(app.world().get_entity(rear).is_ok());
+        assert_eq!(app.world().get::<CarriedBalls>(rover).unwrap().0, 1);
+        let mut carried = app.world_mut().query::<&CarriedBall>();
+        assert_eq!(carried.iter(app.world()).count(), 1);
+    }
 
     #[test]
     fn layout_fits_the_pitch_and_leaves_the_spawn_clear() {

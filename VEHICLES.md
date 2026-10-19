@@ -47,6 +47,34 @@ That is the hole a drone or a #22 import fills later: add a variant or a real
 actuator model, register the body, and teach the drive systems to apply it.
 Do not fork the town, the tile world, or the Zenoh key layout per vehicle.
 
+## CrabTrapBot preview
+
+Select the updated CAD body in a native window with:
+
+```sh
+ZORVANE_VEHICLE=crab-trap-bot TERRA_ZENOH=0 cargo run -p zorvane
+```
+
+`CrabTrapBot.step` uses millimetres. The STEP source (147 MB) and its original
+conversion (`CrabTrapBot_raw.glb`, about 1.6 GB and 27.6 million triangles)
+are kept locally and excluded from Git; the raw GLB can exhaust the graphics
+device when the world loads. The selectable body uses
+`simulator/assets/models/crab_trap_bot_sim.glb`, a centered 19 MB visual
+with about 550,000 triangles. The visual is rotated 90° clockwise from above
+so the intake faces local −Z, then scaled by 0.001 to metres. Its dimensions
+are about 0.607 × 0.614 × 0.601 m. The simulated collision frame has an open
+front; in NEXT, simplified inward-swinging flap visuals and a one-way collection
+rule hold tennis balls. Wheel radius, track width,
+motor limit, and mass still use Terra's provisional values until measured from
+the new hardware. The visual mesh does not provide wheel joints or collision
+geometry.
+
+The optimized GLB was made with `gltfpack -si 0.02 -se 0.02 -sp -noq` and
+recentered by its mesh bounds. `-noq` avoids `KHR_mesh_quantization`, which the
+current Bevy glTF loader rejects. The local native
+binary loads it from disk. A published browser build must copy this asset into
+its `assets/models/` directory before it can display the body.
+
 ## Terra ground rover
 
 `TerraGround` (`id = terra-ground`) is the chassis extracted from Terra's
@@ -72,8 +100,8 @@ commit `d0c34872e70cfe05750eef0662c4d8a58cd51889`.
 
 Implement `VehicleBody` and register the value in `VehicleRegistry::from_id`
 before `select`. `from_env` reads `ZORVANE_VEHICLE` and defaults to
-`terra-ground`. Today `from_id` registers only `TerraGround`. An id that was
-not registered fails at startup with the list of ids that were.
+`terra-ground`. `from_id` registers `TerraGround` and `CrabTrapBot`. An id that
+was not registered fails at startup with the list of ids that were.
 
 The visual path is relative to the asset root (`simulator/assets`, or
 `ZORVANE_ASSETS`). Put the glTF there. The chassis box is metres in the

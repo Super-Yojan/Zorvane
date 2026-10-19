@@ -6,6 +6,7 @@ site/
 docs/reference/
 __pycache__/
 *.pyc
+*.egg-info/
 simulator/.cache/
 simulator/runs/
 .DS_Store
@@ -14,3 +15,7 @@ simulator/runs/
 
 # Local simulation recordings.
 /runs/
+
+# Local CAD sources exceed GitHub's regular file limit; ship the simulator-ready GLB.
+/CrabTrapBot.step
+/CrabTrapBot_raw.glb
