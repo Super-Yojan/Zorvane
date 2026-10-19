@@ -110,6 +110,7 @@ pub struct WorldConfig {
     pub landscape: LandscapeConfig,
     pub tiles: crate::geo::GeoTileConfig,
     pub scene: SceneKind,
+    pub gmu_stadium: bool,
 }
 
 impl Default for WorldConfig {
@@ -124,6 +125,7 @@ impl Default for WorldConfig {
             landscape: LandscapeConfig::default(),
             tiles: crate::geo::GeoTileConfig::default(),
             scene: SceneKind::Town,
+            gmu_stadium: false,
         }
     }
 }
@@ -139,6 +141,12 @@ impl WorldConfig {
         config.tiles = crate::geo::GeoTileConfig::from_env()?;
         if crate::next_competition::enabled() {
             config.prepare_next_field();
+            #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+            {
+                if crate::gmu::requested() {
+                    config.prepare_gmu_field();
+                }
+            }
         } else if std::env::var("TERRA_MISSION").as_deref() == Ok("1") {
             config.tiles.enabled = false;
             config.landscape.enabled = false;
@@ -146,6 +154,7 @@ impl WorldConfig {
             config.scene = SceneKind::Mission;
         } else if config.tiles.enabled {
             config.scene = SceneKind::Tiles;
+            config.prepare_elevation_view();
         }
         if let Ok(seed) = std::env::var("TERRA_MISSION_SEED") {
             config.landscape.seed = seed
@@ -166,6 +175,29 @@ impl WorldConfig {
         self.camera_offset = Vec3::new(0.0, 3.2, 5.5);
         self.follow_rover = true;
         self.scene = SceneKind::Next;
+    }
+
+    #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+    pub(crate) fn prepare_gmu_field(&mut self) {
+        self.prepare_next_field();
+        self.gmu_stadium = true;
+        self.camera_offset = Vec3::new(100.0, 160.0, 180.0);
+        self.follow_rover = false;
+    }
+
+    /// Native map worlds share spectator-only Google scenery.
+    pub(crate) fn uses_google_scenery(&self) -> bool {
+        self.gmu_stadium
+            || (cfg!(all(feature = "gmu-viewer", not(target_arch = "wasm32")))
+                && self.scene == SceneKind::Tiles)
+    }
+
+    pub(crate) fn prepare_elevation_view(&mut self) {
+        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+        {
+            self.camera_offset = Vec3::new(100.0, 160.0, 180.0);
+            self.follow_rover = false;
+        }
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -232,6 +264,9 @@ fn generate_world(
     // Top surface at Y=0, matching the rover controller's ground plane.
     commands.spawn((
         Name::new("Terra ground"),
+        // Keep the broad physics apron visible to sensors without covering the
+        // stadium surroundings in the GMU spectator view.
+        bevy::camera::visibility::RenderLayers::layer(if config.gmu_stadium { 2 } else { 0 }),
         WorldElement,
         Ground,
         RigidBody::Static,
@@ -301,6 +336,7 @@ fn generate_world(
         >::default());
     commands.spawn((
         Name::new("Sun"),
+        bevy::camera::visibility::RenderLayers::from_layers(&[0, 2]),
         WorldElement,
         DirectionalLight {
             illuminance: 10_000.0,
@@ -385,6 +421,8 @@ fn apply_session(world: &mut World) {
     if let Some(mut session) = world.get_resource_mut::<SimSession>() {
         session.note = note;
         session.world = match config.scene {
+            #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+            SceneKind::Next if config.gmu_stadium => crate::session::WorldChoice::Gmu,
             SceneKind::Next => crate::session::WorldChoice::Next,
             SceneKind::Tiles => crate::session::WorldChoice::Tiles,
             _ => crate::session::WorldChoice::Town,
@@ -392,7 +430,7 @@ fn apply_session(world: &mut World) {
     }
 }
 
-fn finish_rebuild(mut commands: Commands) {
+pub(crate) fn finish_rebuild(mut commands: Commands) {
     commands.remove_resource::<crate::session::RebuildWorld>();
 }
 
@@ -410,6 +448,12 @@ fn follow_rover(
     mut cameras: Query<&mut Transform, (With<WorldCamera>, Without<Rover>)>,
 ) {
     if !config.follow_rover {
+        if config.uses_google_scenery() {
+            for mut camera in &mut cameras {
+                *camera = Transform::from_translation(config.camera_offset)
+                    .looking_at(Vec3::ZERO, Vec3::Y);
+            }
+        }
         return;
     }
     // Slot zero is the primary rover; standalone single-rover scenes also work.
@@ -515,6 +559,18 @@ mod tests {
             .is_err()
         );
     }
+    #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+    #[test]
+    fn gmu_preset_keeps_next_physics_and_disables_other_terrain() {
+        let config = WorldConfig::for_choice(crate::session::WorldChoice::Gmu);
+        assert_eq!(config.scene, SceneKind::Next);
+        assert!(config.gmu_stadium);
+        assert_eq!(config.size, crate::next_competition::WORLD_SIZE);
+        assert!(!config.tiles.enabled);
+        assert!(!config.landscape.enabled);
+        assert!(config.validate().is_ok());
+    }
+
     #[test]
     fn menu_defers_the_world_until_rebuild() {
         let mut app = headless();

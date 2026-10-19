@@ -61,6 +61,10 @@ pub const SPAWN_CLEARANCE: f32 = 1.6;
 pub const DEFAULT_BUCKET_SEED: u64 = 42;
 
 pub fn enabled() -> bool {
+    #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+    if crate::gmu::requested() {
+        return true;
+    }
     matches!(
         std::env::var("TERRA_NEXT").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE")
@@ -286,6 +290,9 @@ pub fn pitch_boards() -> Vec<Wall> {
 
 #[derive(Component)]
 pub struct NextField;
+/// Authored turf and markings; kept in robot views when spectators see GMU imagery.
+#[derive(Component)]
+pub struct PitchSurface;
 #[derive(Component)]
 pub struct TennisBall;
 #[derive(Component)]
@@ -338,6 +345,7 @@ fn spawn_field_contents(
     let mid_z = (PITCH_SOUTH + PITCH_NORTH) * 0.5;
     commands.spawn((
         Name::new("NEXT pitch"),
+        PitchSurface,
         NextField,
         Mesh3d(cube.clone()),
         MeshMaterial3d(grass),
@@ -517,6 +525,7 @@ fn paint_lines(commands: &mut Commands, cube: &Handle<Mesh>, line: &Handle<Stand
     let stripe = |commands: &mut Commands, center: Vec3, size: Vec3| {
         commands.spawn((
             Name::new("NEXT line"),
+            PitchSurface,
             NextField,
             Mesh3d(cube.clone()),
             MeshMaterial3d(line.clone()),
@@ -585,6 +594,7 @@ fn paint_lines(commands: &mut Commands, cube: &Handle<Mesh>, line: &Handle<Stand
         let angle = index as f32 * std::f32::consts::TAU / segments as f32;
         commands.spawn((
             Name::new("NEXT line"),
+            PitchSurface,
             NextField,
             Mesh3d(cube.clone()),
             MeshMaterial3d(line.clone()),

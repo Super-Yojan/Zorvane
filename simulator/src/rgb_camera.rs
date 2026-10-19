@@ -65,6 +65,7 @@ fn mount_rgb_cameras(
                     ..default()
                 },
                 Camera3d::default(),
+                bevy::camera::visibility::RenderLayers::from_layers(&[0, 2]),
                 Camera {
                     order: -2,
                     ..default()

@@ -2,6 +2,8 @@
 mod bridge;
 mod depth_camera;
 mod geo;
+#[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+mod gmu;
 mod landscape;
 mod menu;
 mod mission;
@@ -77,6 +79,15 @@ fn main() {
         ..default()
     };
     let defaults = DefaultPlugins.set(assets);
+    // The Google loader can include credential-bearing URLs in error logs.
+    #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+    let defaults = defaults.set(bevy::log::LogPlugin {
+        filter: format!(
+            "{},bevy_3d_tiles=off,bevy_3d_tiles_prepare=off",
+            bevy::log::LogPlugin::default().filter
+        ),
+        ..default()
+    });
     if std::env::var("TERRA_HEADLESS").as_deref() == Ok("1") {
         app.add_plugins(
             defaults
@@ -119,6 +130,11 @@ fn main() {
                 config: bridge::BridgeConfig::from_env(),
             },
         ));
+    #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+    if let Err(message) = gmu::install(&mut app) {
+        eprintln!("GMU setup: {message}");
+        std::process::exit(2);
+    }
     if session::interactive_menu() {
         app.add_plugins(menu::MenuPlugin);
     }

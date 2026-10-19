@@ -11,6 +11,48 @@ impl Plugin for MenuPlugin {
             Update,
             (toggle_pause, sync_clock, clicks, rebuild_ui, sync_ui_camera).chain(),
         );
+        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+        app.add_systems(Update, sync_gmu_status.after(rebuild_ui));
+    }
+}
+
+#[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+#[derive(Component)]
+pub(crate) struct GmuRetryButton;
+#[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+#[derive(Component)]
+pub(crate) struct GmuViewButton;
+#[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+#[derive(Component)]
+struct GmuStatus;
+
+#[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+fn sync_gmu_status(
+    access: Option<Res<crate::gmu::Access>>,
+    config: Option<Res<crate::world::WorldConfig>>,
+    credits: Option<Res<bevy_3d_tiles::TilesetCredits>>,
+    mut labels: Query<&mut Text, With<GmuStatus>>,
+) {
+    if let Some(access) = access {
+        let message = if config.as_ref().is_some_and(|c| c.uses_google_scenery())
+            && credits.is_some_and(|c| c.google_visible)
+        {
+            if config
+                .as_ref()
+                .is_some_and(|c| c.scene == crate::world::SceneKind::Tiles)
+            {
+                "Google imagery is live. Robots use the elevation terrain."
+            } else {
+                "GMU imagery is live. Robot views use the practice surface."
+            }
+        } else {
+            &access.status
+        };
+        for mut text in &mut labels {
+            if text.0 != message {
+                text.0 = message.to_owned();
+            }
+        }
     }
 }
 
@@ -195,7 +237,7 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool) {
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Stretch,
                         padding: UiRect::all(Val::Px(24.0)),
-                        row_gap: Val::Px(12.0),
+                        row_gap: Val::Px(8.0),
                         border_radius: BorderRadius::all(Val::Px(12.0)),
                         ..default()
                     },
@@ -218,13 +260,42 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool) {
                         label(panel, &session.note, 15.0, Color::srgb(0.95, 0.72, 0.45));
                     }
                     label(panel, "World", 14.0, Color::srgb(0.62, 0.68, 0.70));
-                    for choice in [WorldChoice::Town, WorldChoice::Tiles, WorldChoice::Next] {
+                    for choice in [
+                        WorldChoice::Town,
+                        WorldChoice::Tiles,
+                        WorldChoice::Next,
+                        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+                        WorldChoice::Gmu,
+                    ] {
                         button(
                             panel,
                             choice.label(),
                             PickWorld(choice),
                             session.world == choice,
                         );
+                    }
+                    #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+                    if matches!(session.world, WorldChoice::Gmu | WorldChoice::Tiles) {
+                        panel.spawn((
+                            GmuStatus,
+                            Text::new("Connecting map scenery..."),
+                            TextFont {
+                                font_size: FontSize::Px(14.0),
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.75, 0.78, 0.80)),
+                        ));
+                        panel
+                            .spawn(Node {
+                                column_gap: px(8),
+                                ..default()
+                            })
+                            .with_children(|row| {
+                                button(row, "Retry scenery", GmuRetryButton, false);
+                                if paused {
+                                    button(row, "Switch camera", GmuViewButton, false);
+                                }
+                            });
                     }
                     label(panel, "Rovers", 14.0, Color::srgb(0.62, 0.68, 0.70));
                     panel
@@ -240,9 +311,16 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool) {
                             button(row, "+", RoverStep(1), false);
                         });
                     if paused {
-                        button(panel, "Resume", ResumeButton, true);
-                        button(panel, "Restart", RestartButton, false);
-                        button(panel, "Load world", LoadButton, false);
+                        panel
+                            .spawn(Node {
+                                column_gap: px(6),
+                                ..default()
+                            })
+                            .with_children(|row| {
+                                button(row, "Resume", ResumeButton, true);
+                                button(row, "Restart", RestartButton, false);
+                                button(row, "Load world", LoadButton, false);
+                            });
                     } else {
                         button(panel, "Start", StartButton, true);
                     }
@@ -291,4 +369,79 @@ fn button<T: Component>(parent: &mut ChildSpawnerCommands, text: &str, marker: T
                 TextColor(Color::WHITE),
             ));
         });
+}
+
+#[cfg(all(test, feature = "gmu-viewer", not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    fn press<T: Component>(app: &mut App) {
+        let world = app.world_mut();
+        let entity = world
+            .query_filtered::<Entity, With<T>>()
+            .single(world)
+            .unwrap();
+        *world.get_mut::<Interaction>(entity).unwrap() = Interaction::Pressed;
+        app.update();
+    }
+
+    #[test]
+    fn gmu_uses_start_pause_resume_restart_and_world_selection() {
+        let mut app = App::new();
+        app.insert_resource(SimSession::at_menu(WorldChoice::Town, 1))
+            .insert_resource(crate::world::WorldConfig::for_choice(WorldChoice::Gmu))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Time<Virtual>>()
+            .add_plugins(MenuPlugin)
+            .add_systems(Update, crate::gmu::switch_view.after(clicks));
+        app.update();
+        let world = app.world_mut();
+        let gmu = world
+            .query::<(Entity, &PickWorld)>()
+            .iter(world)
+            .find(|(_, p)| p.0 == WorldChoice::Gmu)
+            .unwrap()
+            .0;
+        *world.get_mut::<Interaction>(gmu).unwrap() = Interaction::Pressed;
+        app.update();
+        assert_eq!(app.world().resource::<SimSession>().world, WorldChoice::Gmu);
+        let world = app.world_mut();
+        assert_eq!(world.query::<&GmuStatus>().iter(world).count(), 1);
+        press::<StartButton>(&mut app);
+        assert_eq!(app.world().resource::<SimSession>().phase, Phase::Playing);
+        assert!(app.world().contains_resource::<RebuildWorld>());
+        app.world_mut().remove_resource::<RebuildWorld>();
+        press::<PauseButton>(&mut app);
+        assert_eq!(app.world().resource::<SimSession>().phase, Phase::Paused);
+        press::<GmuViewButton>(&mut app);
+        assert!(
+            app.world()
+                .resource::<crate::world::WorldConfig>()
+                .follow_rover
+        );
+        press::<ResumeButton>(&mut app);
+        assert_eq!(app.world().resource::<SimSession>().phase, Phase::Playing);
+        assert!(!app.world().contains_resource::<RebuildWorld>());
+        press::<PauseButton>(&mut app);
+        press::<RestartButton>(&mut app);
+        assert!(app.world().contains_resource::<RebuildWorld>());
+        app.world_mut().remove_resource::<RebuildWorld>();
+        press::<PauseButton>(&mut app);
+        let world = app.world_mut();
+        let next = world
+            .query::<(Entity, &PickWorld)>()
+            .iter(world)
+            .find(|(_, p)| p.0 == WorldChoice::Next)
+            .unwrap()
+            .0;
+        *world.get_mut::<Interaction>(next).unwrap() = Interaction::Pressed;
+        app.update();
+        press::<LoadButton>(&mut app);
+        assert_eq!(
+            app.world().resource::<SimSession>().world,
+            WorldChoice::Next
+        );
+        assert_eq!(app.world().resource::<SimSession>().phase, Phase::Playing);
+        assert!(app.world().contains_resource::<RebuildWorld>());
+    }
 }

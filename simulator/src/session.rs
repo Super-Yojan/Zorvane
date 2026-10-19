@@ -11,6 +11,8 @@ pub enum WorldChoice {
     Town,
     Tiles,
     Next,
+    #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+    Gmu,
 }
 
 impl WorldChoice {
@@ -19,10 +21,16 @@ impl WorldChoice {
             Self::Town => "Practice town",
             Self::Tiles => "Elevation tiles",
             Self::Next => "NEXT pitch",
+            #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+            Self::Gmu => "NEXT - GMU Stadium",
         }
     }
 
     pub fn from_env() -> Self {
+        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+        if crate::gmu::requested() {
+            return Self::Gmu;
+        }
         if crate::next_competition::enabled() {
             Self::Next
         } else if crate::geo::GeoTileConfig::from_env()
@@ -113,8 +121,13 @@ impl WorldConfig {
                 // Terrarium PNG still covers the default Johnson Center anchor.
                 config.tiles.fetch = cfg!(not(target_arch = "wasm32"));
                 config.landscape.enabled = false;
+                config.prepare_elevation_view();
             }
             WorldChoice::Next => config.prepare_next_field(),
+            #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+            WorldChoice::Gmu => {
+                config.prepare_gmu_field();
+            }
         }
         config
     }

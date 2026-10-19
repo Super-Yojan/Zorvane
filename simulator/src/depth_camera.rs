@@ -240,6 +240,7 @@ fn mount_cameras(
     physics: Res<RoverPhysicsConfig>,
     rovers: NewRovers<'_, '_>,
     mut images: ResMut<Assets<Image>>,
+    world: Option<Res<crate::world::WorldConfig>>,
 ) {
     for (rover, id, slot) in &rovers {
         let extent = Extent3d {
@@ -308,6 +309,7 @@ fn mount_cameras(
                 ),
                 ChildOf(rover),
                 DepthCapture,
+                bevy::camera::visibility::RenderLayers::from_layers(&[0, 2]),
             ))
             .id();
         if config.preview && slot.is_none_or(|slot| slot.0 == 0) {
@@ -318,7 +320,11 @@ fn mount_cameras(
                     Node {
                         position_type: PositionType::Absolute,
                         right: px(16.0),
-                        bottom: px(16.0),
+                        bottom: px(if world.as_ref().is_some_and(|w| w.uses_google_scenery()) {
+                            100.0
+                        } else {
+                            16.0
+                        }),
                         flex_direction: FlexDirection::Column,
                         padding: UiRect::all(px(8.0)),
                         row_gap: px(6.0),
@@ -542,7 +548,8 @@ mod tests {
                 ..default()
             },
         })
-        .add_plugins(crate::occupancy_map::TerraOccupancyMapPlugin);
+        .add_plugins(crate::occupancy_map::TerraOccupancyMapPlugin)
+        .add_plugins(crate::rgb_camera::TerraRgbCameraPlugin);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
         while app.plugins_state() == PluginsState::Adding {
             assert!(
@@ -561,35 +568,98 @@ mod tests {
         let material = app
             .world_mut()
             .resource_mut::<Assets<StandardMaterial>>()
-            .add(StandardMaterial::default());
+            .add(StandardMaterial {
+                base_color: Color::srgb(0.0, 1.0, 0.0),
+                unlit: true,
+                ..default()
+            });
         app.world_mut().spawn((
             Mesh3d(mesh),
             MeshMaterial3d(material),
             Transform::from_xyz(0.0, 0.0, -3.0),
         ));
+        // A red visual-only wall is closer than the green simulation wall.
+        // Neither RGB nor depth may see it; depth must still map the green wall.
+        let visual_mesh = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .add(Cuboid::new(4.0, 4.0, 0.2));
+        let visual_material = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial {
+                base_color: Color::srgb(1.0, 0.0, 0.0),
+                unlit: true,
+                ..default()
+            });
+        let visual = app
+            .world_mut()
+            .spawn((
+                Mesh3d(visual_mesh),
+                MeshMaterial3d(visual_material),
+                Transform::from_xyz(0.0, 0.0, -1.5),
+            ))
+            .id();
+        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+        {
+            app.world_mut()
+                .entity_mut(visual)
+                .insert(bevy_3d_tiles::TileGeometry { set_id: 1 });
+            app.add_systems(Update, crate::gmu::isolate_tiles);
+        }
+        #[cfg(not(all(feature = "gmu-viewer", not(target_arch = "wasm32"))))]
+        app.world_mut()
+            .entity_mut(visual)
+            .insert(bevy::camera::visibility::RenderLayers::layer(1));
         app.world_mut().spawn((Rover, Transform::default()));
+        let sensor_forward = app.world().resource::<RoverPhysicsConfig>().chassis_size.z * 0.5
+            + app.world().resource::<DepthCameraConfig>().front_clearance;
+        let expected_wall_depth = 3.0 - 0.1 - sensor_forward;
         let mut captured = false;
+        let mut rgb_captured = false;
         while std::time::Instant::now() < deadline {
             app.update();
             let world = app.world_mut();
+            if let Ok(rgb) = world.query::<&crate::rgb_camera::RgbFrame>().single(world) {
+                let index = ((rgb.height / 2 * rgb.width + rgb.width / 2) * 4) as usize;
+                if let Some(pixel) = rgb.rgba.get(index..index + 4) {
+                    if pixel[1] > 150
+                        && u16::from(pixel[1]) > u16::from(pixel[0]) * 2
+                        && pixel[2] < 100
+                    {
+                        rgb_captured = true;
+                    }
+                }
+            }
             if let Ok(frame) = world.query::<&DepthFrame>().single(world) {
                 let index = (frame.height / 2 * frame.width + frame.width / 2) as usize;
                 if let Some(&metres) = frame.depth_metres.get(index)
                     && metres.is_finite()
                 {
-                    assert!((metres - 2.45).abs() < 0.05, "wall depth: {metres}");
+                    assert!(
+                        (metres - expected_wall_depth).abs() < 0.05,
+                        "wall depth: {metres}"
+                    );
                     let exposure = frame
                         .exposure
                         .expect("GPU copy must carry its exposure pose");
                     assert!(exposure.timestamp <= frame.received_at);
-                    assert!((exposure.camera_transform.translation().z + 0.45).abs() < 1e-5);
+                    assert!(
+                        (exposure.camera_transform.translation().z + sensor_forward).abs() < 1e-5
+                    );
                     captured = true;
-                    break;
+                    if rgb_captured {
+                        break;
+                    }
                 }
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(captured, "no valid depth frame received within 45 seconds");
+        assert!(
+            rgb_captured,
+            "RGB must see the green simulation wall, not red spectator geometry"
+        );
         let world = app.world_mut();
         let mapped = world
             .query::<&crate::occupancy_map::RoverOccupancyMap>()
