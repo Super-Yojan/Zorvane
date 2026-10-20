@@ -1,6 +1,6 @@
 # NEXT competition practice
 
-**TL;DR.** `TERRA_NEXT=1` loads a full soccer pitch. Zatara is rover 0 on `terra-ground`. Six tennis balls. Twenty open 5-gallon buckets. Select `crab-trap-bot` to collect balls through its front opening and score them with operator clicks at the goal.
+**TL;DR.** `TERRA_NEXT=1` loads a full soccer pitch. Zatara is rover 0 on `terra-ground`. Sixty tennis balls near the two goals. Twenty open 5-gallon buckets. Select `crab-trap-bot` to collect balls through its front opening and score them with operator clicks at the goal.
 
 ![NEXT pitch](../docs/assets/next.png)
 
@@ -12,7 +12,7 @@
 
 Zatara starts on the south goal line, centred on the goal, facing Bevy −Z (into the field).
 A second rover starts on the north goal line facing the other way. Further rovers split across the two goals and spread along the goal line.
-Balls rest just north of the centre spot.
+Thirty balls rest in three rows near each goal, spread across most of the field width. The middle of the pitch has no starting balls.
 A ball dropped through an open bucket top is pulled toward the middle of the bucket.
 Boards run the touchlines and stop at each goal.
 
@@ -47,9 +47,9 @@ To practice collecting with the updated model:
 TERRA_NEXT=1 TERRA_ZENOH=0 ZORVANE_VEHICLE=crab-trap-bot cargo run -p zorvane
 ```
 
-The CrabTrapBot has an open-front collision frame. A ball entering the low, central intake is moved into a visible holding area inside the rover. The two simplified flap visuals swing inward as a ball approaches and return closed afterward. Other vehicles continue to push balls.
+The CrabTrapBot has an open-front collision frame. A ball entering the low, central intake is moved into a visible holding area inside the rover. It can hold up to eight balls; further balls remain on the field until it scores its load. The two simplified flap visuals swing inward as a ball approaches and return closed afterward. Other vehicles continue to push balls.
 
-Each NEXT rover has an onboard ball count in the upper-right status panel. A rover carrying balls returns to the goal where it spawned (even-numbered slots at the south goal, odd-numbered slots at the north goal). Inside the goal mouth, within 1 metre of its goal line, it stops and displays an orange attention marker. Its status row turns orange and says **CLICK TO SCORE**. Click the rover in the 3D view, or its status row, once per ball. Each click removes one onboard ball and adds one to the team score. Empty rover clicks do nothing. After the last click the marker clears and the rover can drive again.
+Each NEXT rover has an onboard ball count and a state label in the upper-right status panel: **SEARCHING**, **CARRYING BALLS**, **FULL: RETURN TO GOAL**, or **WAITING FOR OPERATOR**. A rover carrying balls returns to the goal where it spawned (even-numbered slots at the south goal, odd-numbered slots at the north goal). Inside the goal mouth, within 1 metre of its goal line, it stops and displays an orange attention marker. Its status row turns orange and says **CLICK TO SCORE**. Click the rover in the 3D view, or its status row, once per ball. Each click removes one onboard ball and adds one to the team score. Empty rover clicks do nothing. After the last click the marker clears and the rover can drive again.
 
 This remains a one-way collection and operator-scoring approximation: the STEP model's exact panel geometry, hinge torque, physical ball contact with panels, and release into buckets are not modeled. The team's score represents confirmed operator clicks, not balls physically deposited in buckets.
 

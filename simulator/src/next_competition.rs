@@ -46,6 +46,8 @@ const MARKING_Y: f32 = 0.008;
 /// Regulation tennis ball, metres and kilograms.
 pub const TENNIS_BALL_RADIUS: f32 = 0.0335;
 pub const TENNIS_BALL_MASS: f32 = 0.058;
+pub const BALLS_PER_GOAL: usize = 30;
+pub const ROVER_BALL_CAPACITY: usize = 8;
 
 /// 5-gallon bucket, from the user-supplied product diagram (inches × 0.0254).
 /// Open top. The diagram’s lid is not part of the model.
@@ -261,16 +263,17 @@ fn goal_line_xs(count: usize, spacing: f32, chassis_x: f32) -> Vec<f32> {
     xs
 }
 
-pub fn ball_positions() -> [Vec3; 6] {
-    let y = TENNIS_BALL_RADIUS;
-    [
-        Vec3::new(-2.4, y, -3.2),
-        Vec3::new(-0.7, y, -4.5),
-        Vec3::new(1.0, y, -3.4),
-        Vec3::new(2.6, y, -4.9),
-        Vec3::new(-1.7, y, -5.7),
-        Vec3::new(0.8, y, -6.3),
-    ]
+/// Three rows across most of the field width at each end; the middle stays clear.
+pub fn ball_positions() -> [Vec3; BALLS_PER_GOAL * 2] {
+    std::array::from_fn(|index| {
+        let goal = index / BALLS_PER_GOAL;
+        let local = index % BALLS_PER_GOAL;
+        let row = local / 10;
+        let column = local % 10;
+        let x = -30.0 + column as f32 * (60.0 / 9.0) + if row == 1 { 1.5 } else { 0.0 };
+        let z = (39.0 + row as f32 * 5.0) * if goal == 0 { -1.0 } else { 1.0 };
+        Vec3::new(x, TENNIS_BALL_RADIUS, z)
+    })
 }
 
 pub fn pitch_boards() -> Vec<Wall> {
@@ -325,9 +328,22 @@ impl RoverBallLoad {
     pub fn count(self) -> usize {
         self.collected + self.waiting
     }
-    fn pickup(&mut self) {
-        if self.waiting == 0 {
-            self.collected += 1;
+    fn pickup(&mut self) -> bool {
+        if self.waiting > 0 || self.count() >= ROVER_BALL_CAPACITY {
+            return false;
+        }
+        self.collected += 1;
+        true
+    }
+    fn state_label(self) -> &'static str {
+        if self.waiting > 0 {
+            "WAITING FOR OPERATOR"
+        } else if self.count() >= ROVER_BALL_CAPACITY {
+            "FULL: RETURN TO GOAL"
+        } else if self.collected > 0 {
+            "CARRYING BALLS"
+        } else {
+            "SEARCHING"
         }
     }
     fn queue_at_goal(&mut self) {
@@ -779,11 +795,14 @@ fn collect_crab_trap_balls(
             {
                 open = true;
             }
-            if !in_front_intake(local) || !claimed.insert(ball) {
+            if !in_front_intake(local) || claimed.contains(&ball) {
                 continue;
             }
             let slot = carried.count();
-            carried.pickup();
+            if !carried.pickup() {
+                continue;
+            }
+            claimed.insert(ball);
             commands.entity(ball).despawn();
             commands.entity(rover).with_children(|parent| {
                 parent.spawn((
@@ -1097,13 +1116,24 @@ fn update_score_hud(
                 TextColor(Color::WHITE),
             ));
             for (rover, id, collected, waiting) in &snapshot.rows {
+                let load = RoverBallLoad {
+                    collected: *collected,
+                    waiting: *waiting,
+                };
                 let label = if *waiting > 0 {
                     format!(
-                        "Rover {id}: {} balls\nCLICK TO SCORE ({waiting} left)",
-                        collected + waiting
+                        "Rover {id}: {}/{} balls\nState: {}\nCLICK TO SCORE ({waiting} left)",
+                        load.count(),
+                        ROVER_BALL_CAPACITY,
+                        load.state_label()
                     )
                 } else {
-                    format!("Rover {id}: {} balls", collected + waiting)
+                    format!(
+                        "Rover {id}: {}/{} balls\nState: {}",
+                        load.count(),
+                        ROVER_BALL_CAPACITY,
+                        load.state_label()
+                    )
                 };
                 panel
                     .spawn((
@@ -1224,14 +1254,16 @@ mod tests {
         let mut second = RoverBallLoad::default();
         let mut team = NextTeamScore::default();
         for _ in 0..3 {
-            first.pickup();
+            assert!(first.pickup());
         }
-        second.pickup();
+        assert!(second.pickup());
+        assert_eq!(first.state_label(), "CARRYING BALLS");
         assert_eq!((first.count(), second.count(), team.0), (3, 1, 0));
         assert!(!first.score_one(&mut team));
         first.queue_at_goal();
+        assert_eq!(first.state_label(), "WAITING FOR OPERATOR");
         assert_eq!((first.collected, first.waiting, first.count()), (0, 3, 3));
-        first.pickup(); // A waiting rover cannot collect another ball.
+        assert!(!first.pickup()); // A waiting rover cannot collect another ball.
         assert_eq!(first.count(), 3);
         for remaining in (0..3).rev() {
             assert!(first.score_one(&mut team));
@@ -1239,8 +1271,59 @@ mod tests {
         }
         assert!(!first.score_one(&mut team));
         assert_eq!((first.waiting, second.count(), team.0), (0, 1, 3));
-        first.pickup(); // Normal collection resumes after the final click.
+        assert_eq!(first.state_label(), "SEARCHING");
+        assert!(first.pickup()); // Normal collection resumes after the final click.
         assert_eq!(first.count(), 1);
+    }
+
+    #[test]
+    fn full_rover_leaves_ball_on_field_until_it_scores() {
+        let mut app = App::new();
+        app.add_systems(FixedUpdate, collect_crab_trap_balls);
+        let rover = app
+            .world_mut()
+            .spawn((
+                Rover,
+                CrabTrapIntake,
+                Position(Vec3::new(0.0, 0.32, 0.0)),
+                Rotation::default(),
+                RoverBallLoad {
+                    collected: ROVER_BALL_CAPACITY,
+                    waiting: 0,
+                },
+            ))
+            .id();
+        let ball = app
+            .world_mut()
+            .spawn((
+                TennisBall,
+                Position(Vec3::new(0.0, TENNIS_BALL_RADIUS, -0.25)),
+                Mesh3d(Handle::<Mesh>::default()),
+                MeshMaterial3d(Handle::<StandardMaterial>::default()),
+            ))
+            .id();
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(app.world().get_entity(ball).is_ok());
+        let load = app.world().get::<RoverBallLoad>(rover).unwrap();
+        assert_eq!(load.count(), ROVER_BALL_CAPACITY);
+        assert_eq!(load.state_label(), "FULL: RETURN TO GOAL");
+        let mut carried = app.world_mut().query::<&CarriedBall>();
+        assert_eq!(carried.iter(app.world()).count(), 0);
+        let mut load = app.world_mut().get_mut::<RoverBallLoad>(rover).unwrap();
+        load.queue_at_goal();
+        let mut team = NextTeamScore::default();
+        for _ in 0..ROVER_BALL_CAPACITY {
+            assert!(
+                app.world_mut()
+                    .get_mut::<RoverBallLoad>(rover)
+                    .unwrap()
+                    .score_one(&mut team)
+            );
+        }
+        assert_eq!(team.0, ROVER_BALL_CAPACITY);
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(app.world().get_entity(ball).is_err());
+        assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().count(), 1);
     }
 
     #[test]
@@ -1316,12 +1399,21 @@ mod tests {
     fn layout_fits_the_pitch_and_leaves_the_spawn_clear() {
         let spawn = Vec2::ZERO;
         let mut balls = ball_positions();
-        assert_eq!(balls.len(), 6);
+        assert_eq!(balls.len(), BALLS_PER_GOAL * 2);
+        let mut half_counts = [0; 2];
+        let mut x_ranges = [(f32::INFINITY, f32::NEG_INFINITY); 2];
         for ball in &balls {
             assert!(on_pitch(ball.x, ball.z, 0.5), "{ball:?}");
             assert!((ball.y - TENNIS_BALL_RADIUS).abs() < 1e-4);
             assert!(Vec2::new(ball.x, ball.z).distance(spawn) > 1.5);
+            assert!(ball.z.abs() >= 39.0, "ball is near field center: {ball:?}");
+            let half = usize::from(ball.z > 0.0);
+            half_counts[half] += 1;
+            x_ranges[half].0 = x_ranges[half].0.min(ball.x);
+            x_ranges[half].1 = x_ranges[half].1.max(ball.x);
         }
+        assert_eq!(half_counts, [BALLS_PER_GOAL, BALLS_PER_GOAL]);
+        assert!(x_ranges.iter().all(|(left, right)| right - left >= 60.0));
         balls.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.z.total_cmp(&b.z)));
         for pair in balls.windows(2) {
             assert!(pair[0].distance(pair[1]) > 0.5, "{pair:?}");
