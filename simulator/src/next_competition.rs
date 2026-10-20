@@ -46,7 +46,7 @@ const MARKING_Y: f32 = 0.008;
 /// Regulation tennis ball, metres and kilograms.
 pub const TENNIS_BALL_RADIUS: f32 = 0.0335;
 pub const TENNIS_BALL_MASS: f32 = 0.058;
-pub const BALLS_PER_GOAL: usize = 30;
+pub const BALLS_PER_GOAL: usize = 36;
 pub const ROVER_BALL_CAPACITY: usize = 8;
 
 /// 5-gallon bucket, from the user-supplied product diagram (inches × 0.0254).
@@ -263,15 +263,25 @@ fn goal_line_xs(count: usize, spacing: f32, chassis_x: f32) -> Vec<f32> {
     xs
 }
 
-/// Three rows across most of the field width at each end; the middle stays clear.
+/// Most balls cluster in each penalty box, with a few along its outer flanks.
 pub fn ball_positions() -> [Vec3; BALLS_PER_GOAL * 2] {
     std::array::from_fn(|index| {
         let goal = index / BALLS_PER_GOAL;
         let local = index % BALLS_PER_GOAL;
-        let row = local / 10;
-        let column = local % 10;
-        let x = -30.0 + column as f32 * (60.0 / 9.0) + if row == 1 { 1.5 } else { 0.0 };
-        let z = (39.0 + row as f32 * 5.0) * if goal == 0 { -1.0 } else { 1.0 };
+        let (x, distance_from_center) = if local < 30 {
+            let row = local / 10;
+            let column = local % 10;
+            (
+                -18.0 + column as f32 * 4.0 + if row == 1 { 1.0 } else { 0.0 },
+                40.0 + row as f32 * 4.0,
+            )
+        } else {
+            let flank = local - 30;
+            let rank = flank % 3;
+            let side = if flank < 3 { -1.0 } else { 1.0 };
+            (side * (24.0 + rank as f32 * 3.0), 41.0 + rank as f32 * 3.0)
+        };
+        let z = distance_from_center * if goal == 0 { -1.0 } else { 1.0 };
         Vec3::new(x, TENNIS_BALL_RADIUS, z)
     })
 }
@@ -758,11 +768,13 @@ fn setup_crab_traps(
 }
 
 fn in_front_intake(local: Vec3) -> bool {
-    local.x.abs() <= 0.17
-        && local.y >= -0.31
-        && local.y <= -0.19
-        && local.z >= -0.33
-        && local.z <= -0.19
+    // Include the space behind both flap edges, where a ball can roll or bounce
+    // after crossing the front opening. The rear wall starts beyond this region.
+    local.x.abs() <= 0.245
+        && local.y >= -0.35
+        && local.y <= -0.10
+        && local.z >= -0.37
+        && local.z <= 0.18
 }
 
 fn collect_crab_trap_balls(
@@ -1209,13 +1221,14 @@ mod tests {
     #[test]
     fn trap_accepts_ground_ball_only_through_front_opening() {
         assert!(in_front_intake(Vec3::new(0.0, -0.287, -0.25)));
-        assert!(!in_front_intake(Vec3::new(0.20, -0.287, -0.25)));
+        assert!(in_front_intake(Vec3::new(0.22, -0.287, 0.08)));
+        assert!(!in_front_intake(Vec3::new(0.27, -0.287, 0.08)));
         assert!(!in_front_intake(Vec3::new(0.0, -0.287, 0.25)));
         assert!(!in_front_intake(Vec3::new(0.0, 0.0, -0.25)));
     }
 
     #[test]
-    fn crab_trap_carries_front_ball_but_leaves_rear_ball_on_pitch() {
+    fn crab_trap_collects_ball_behind_side_flap_but_leaves_rear_ball() {
         let mut app = App::new();
         app.add_systems(FixedUpdate, collect_crab_trap_balls);
         let rover = app
@@ -1228,24 +1241,28 @@ mod tests {
                 RoverBallLoad::default(),
             ))
             .id();
-        let spawn_ball = |app: &mut App, z| {
+        let spawn_ball = |app: &mut App, x, z| {
             app.world_mut()
                 .spawn((
                     TennisBall,
-                    Position(Vec3::new(0.0, TENNIS_BALL_RADIUS, z)),
+                    Position(Vec3::new(x, TENNIS_BALL_RADIUS, z)),
                     Mesh3d(Handle::<Mesh>::default()),
                     MeshMaterial3d(Handle::<StandardMaterial>::default()),
                 ))
                 .id()
         };
-        let front = spawn_ball(&mut app, -0.25);
-        let rear = spawn_ball(&mut app, 0.25);
+        let front = spawn_ball(&mut app, 0.0, -0.25);
+        let inside_side = spawn_ball(&mut app, 0.22, 0.08);
+        let outside_side = spawn_ball(&mut app, 0.27, 0.08);
+        let rear = spawn_ball(&mut app, 0.0, 0.25);
         app.world_mut().run_schedule(FixedUpdate);
         assert!(app.world().get_entity(front).is_err());
+        assert!(app.world().get_entity(inside_side).is_err());
+        assert!(app.world().get_entity(outside_side).is_ok());
         assert!(app.world().get_entity(rear).is_ok());
-        assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().count(), 1);
+        assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().count(), 2);
         let mut carried = app.world_mut().query::<&CarriedBall>();
-        assert_eq!(carried.iter(app.world()).count(), 1);
+        assert_eq!(carried.iter(app.world()).count(), 2);
     }
 
     #[test]
@@ -1401,18 +1418,25 @@ mod tests {
         let mut balls = ball_positions();
         assert_eq!(balls.len(), BALLS_PER_GOAL * 2);
         let mut half_counts = [0; 2];
+        let mut penalty_counts = [0; 2];
         let mut x_ranges = [(f32::INFINITY, f32::NEG_INFINITY); 2];
         for ball in &balls {
             assert!(on_pitch(ball.x, ball.z, 0.5), "{ball:?}");
             assert!((ball.y - TENNIS_BALL_RADIUS).abs() < 1e-4);
             assert!(Vec2::new(ball.x, ball.z).distance(spawn) > 1.5);
-            assert!(ball.z.abs() >= 39.0, "ball is near field center: {ball:?}");
+            assert!(ball.z.abs() >= 40.0, "ball is near field center: {ball:?}");
             let half = usize::from(ball.z > 0.0);
             half_counts[half] += 1;
+            if ball.x.abs() <= PENALTY_AREA_WIDTH * 0.5
+                && ball.z.abs() >= PITCH_SOUTH - PENALTY_AREA_DEPTH
+            {
+                penalty_counts[half] += 1;
+            }
             x_ranges[half].0 = x_ranges[half].0.min(ball.x);
             x_ranges[half].1 = x_ranges[half].1.max(ball.x);
         }
         assert_eq!(half_counts, [BALLS_PER_GOAL, BALLS_PER_GOAL]);
+        assert_eq!(penalty_counts, [30, 30]);
         assert!(x_ranges.iter().all(|(left, right)| right - left >= 60.0));
         balls.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.z.total_cmp(&b.z)));
         for pair in balls.windows(2) {
