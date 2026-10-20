@@ -98,9 +98,15 @@ impl RoverBody {
     /// Open-front chassis frame for the CrabTrapBot intake. Balls can roll
     /// between the rails; the rear crossbar still blocks them physically.
     pub fn with_front_intake(mut self, size: Vec3) -> Self {
+        self.collider = Self::crab_trap_collider(size, false);
+        self
+    }
+
+    /// The fourth wall closes the intake once the rover is full.
+    pub(crate) fn crab_trap_collider(size: Vec3, closed: bool) -> Collider {
         let rail = 0.055;
-        let back = 0.065;
-        self.collider = Collider::compound(vec![
+        let bar = 0.065;
+        let mut parts = vec![
             (
                 Position::from_xyz(-(size.x - rail) * 0.5, 0.0, 0.0),
                 Rotation::default(),
@@ -112,12 +118,19 @@ impl RoverBody {
                 Collider::cuboid(rail, size.y, size.z),
             ),
             (
-                Position::from_xyz(0.0, 0.0, (size.z - back) * 0.5),
+                Position::from_xyz(0.0, 0.0, (size.z - bar) * 0.5),
                 Rotation::default(),
-                Collider::cuboid(size.x, size.y, back),
+                Collider::cuboid(size.x, size.y, bar),
             ),
-        ]);
-        self
+        ];
+        if closed {
+            parts.push((
+                Position::from_xyz(0.0, 0.0, -(size.z - bar) * 0.5),
+                Rotation::default(),
+                Collider::cuboid(size.x, size.y, bar),
+            ));
+        }
+        Collider::compound(parts)
     }
 }
 

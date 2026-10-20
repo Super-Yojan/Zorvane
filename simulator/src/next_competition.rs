@@ -96,8 +96,10 @@ pub fn install(app: &mut App) {
                 settle_deposits,
                 collect_crab_trap_balls,
                 queue_balls_at_goal,
+                sync_full_crab_traps,
             )
-                .chain(),
+                .chain()
+                .before(PhysicsSystems::StepSimulation),
         );
     if enabled() && !menu {
         app.add_systems(Startup, spawn_field);
@@ -384,6 +386,8 @@ struct NextHud;
 struct ScoreRover(Entity);
 #[derive(Component)]
 struct TrapInstalled;
+#[derive(Component)]
+struct TrapFrontClosed;
 #[derive(Component)]
 struct TrapFlap {
     side: f32,
@@ -794,6 +798,11 @@ fn collect_crab_trap_balls(
     let mut claimed = std::collections::HashSet::new();
     for (rover, position, rotation, mut carried) in &mut rovers {
         if carried.waiting > 0 {
+            for (_, parent, mut transform) in &mut flaps {
+                if parent.parent() == rover {
+                    transform.rotation = Quat::IDENTITY;
+                }
+            }
             continue;
         }
         let mut open = false;
@@ -832,11 +841,43 @@ fn collect_crab_trap_balls(
         }
         for (flap, parent, mut transform) in &mut flaps {
             if parent.parent() == rover {
+                if carried.count() >= ROVER_BALL_CAPACITY {
+                    transform.rotation = Quat::IDENTITY;
+                    continue;
+                }
                 let target = if open { flap.side * 1.05 } else { 0.0 };
                 let current = transform.rotation.to_euler(EulerRot::YXZ).0;
                 let next = current + (target - current).clamp(-0.15, 0.15);
                 transform.rotation = Quat::from_rotation_y(next);
             }
+        }
+    }
+}
+
+fn sync_full_crab_traps(
+    mut commands: Commands,
+    physics: Res<crate::physics::RoverPhysicsConfig>,
+    mut rovers: Query<
+        (
+            Entity,
+            &RoverBallLoad,
+            &mut Collider,
+            Option<&TrapFrontClosed>,
+        ),
+        With<CrabTrapIntake>,
+    >,
+) {
+    for (rover, load, mut collider, closed) in &mut rovers {
+        let should_close = load.count() >= ROVER_BALL_CAPACITY || load.waiting > 0;
+        if should_close == closed.is_some() {
+            continue;
+        }
+        *collider =
+            crate::physics::RoverBody::crab_trap_collider(physics.chassis_size, should_close);
+        if should_close {
+            commands.entity(rover).insert(TrapFrontClosed);
+        } else {
+            commands.entity(rover).remove::<TrapFrontClosed>();
         }
     }
 }
@@ -1341,6 +1382,101 @@ mod tests {
         app.world_mut().run_schedule(FixedUpdate);
         assert!(app.world().get_entity(ball).is_err());
         assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn eighth_pickup_closes_flaps_and_front_collider_until_scoring_finishes() {
+        let physics = RoverPhysicsConfig::from_body(&zorvane_vehicle::CrabTrapBot).unwrap();
+        let mut app = App::new();
+        app.insert_resource(physics.clone()).add_systems(
+            FixedUpdate,
+            (collect_crab_trap_balls, sync_full_crab_traps).chain(),
+        );
+        let rover = app
+            .world_mut()
+            .spawn((
+                CrabTrapIntake,
+                Position(Vec3::new(0.0, 0.32, 0.0)),
+                Rotation::default(),
+                RoverBallLoad {
+                    collected: ROVER_BALL_CAPACITY - 1,
+                    waiting: 0,
+                },
+                RoverBody::crab_trap_collider(physics.chassis_size, false),
+            ))
+            .id();
+        let flap = app
+            .world_mut()
+            .spawn((
+                TrapFlap { side: 1.0 },
+                Transform::from_rotation(Quat::from_rotation_y(1.0)),
+            ))
+            .id();
+        app.world_mut().entity_mut(rover).add_child(flap);
+        app.world_mut().spawn((
+            TennisBall,
+            Position(Vec3::new(0.0, TENNIS_BALL_RADIUS, -0.25)),
+            Mesh3d(Handle::<Mesh>::default()),
+            MeshMaterial3d(Handle::<StandardMaterial>::default()),
+        ));
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().count(), 8);
+        assert!(app.world().get::<TrapFrontClosed>(rover).is_some());
+        assert_eq!(
+            app.world()
+                .get::<Collider>(rover)
+                .unwrap()
+                .shape()
+                .as_compound()
+                .unwrap()
+                .shapes()
+                .len(),
+            4
+        );
+        let front_center = Vec3::new(0.0, 0.0, -(physics.chassis_size.z - 0.065) * 0.5);
+        assert!(app.world().get::<Collider>(rover).unwrap().contains_point(
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            front_center
+        ));
+        assert_eq!(
+            app.world().get::<Transform>(flap).unwrap().rotation,
+            Quat::IDENTITY
+        );
+        let mut team = NextTeamScore::default();
+        let mut load = app.world_mut().get_mut::<RoverBallLoad>(rover).unwrap();
+        load.queue_at_goal();
+        assert!(load.score_one(&mut team));
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(team.0, 1);
+        assert!(app.world().get::<TrapFrontClosed>(rover).is_some());
+        for _ in 1..ROVER_BALL_CAPACITY {
+            assert!(
+                app.world_mut()
+                    .get_mut::<RoverBallLoad>(rover)
+                    .unwrap()
+                    .score_one(&mut team)
+            );
+        }
+        app.world_mut().run_schedule(FixedUpdate);
+        assert_eq!(team.0, ROVER_BALL_CAPACITY);
+        assert!(app.world().get::<TrapFrontClosed>(rover).is_none());
+        assert_eq!(
+            app.world()
+                .get::<Collider>(rover)
+                .unwrap()
+                .shape()
+                .as_compound()
+                .unwrap()
+                .shapes()
+                .len(),
+            3
+        );
+        assert!(!app.world().get::<Collider>(rover).unwrap().contains_point(
+            Vec3::ZERO,
+            Quat::IDENTITY,
+            front_center
+        ));
     }
 
     #[test]
