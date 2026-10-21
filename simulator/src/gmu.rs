@@ -168,7 +168,7 @@ pub fn install(app: &mut App) -> Result<(), String> {
     let offline = std::env::var("TERRA_GMU_OFFLINE").as_deref() == Ok("1")
         || std::env::var("TERRA_HEADLESS").as_deref() == Ok("1");
     let key = (!offline)
-        .then(|| std::env::var("GOOGLE_MAPS_API_KEY").ok())
+        .then(crate::maps_key::load)
         .flatten()
         .filter(|k| !k.trim().is_empty())
         .map(|k| k.trim().to_owned());
@@ -733,4 +733,10 @@ mod tests {
             0
         );
     }
+}
+
+/// Geographic reference shared by rendered NEXT placement and simulated sensors.
+pub(crate) fn geographic_reference() -> Option<crate::outdoor::GeoReference> {
+    let p = Placement::from_env().ok()?;
+    Some(crate::outdoor::GeoReference { latitude: p.latitude, longitude: p.longitude, heading: p.heading })
 }

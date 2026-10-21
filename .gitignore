@@ -19,3 +19,8 @@ simulator/runs/
 # Local CAD sources exceed GitHub's regular file limit; ship the simulator-ready GLB.
 /CrabTrapBot.step
 /CrabTrapBot_raw.glb
+
+# Local credentials.
+.env
+.env.*
+!.env.example

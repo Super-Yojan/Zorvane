@@ -4,6 +4,8 @@ mod depth_camera;
 mod geo;
 #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
 mod gmu;
+#[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+mod maps_key;
 mod landscape;
 mod menu;
 mod mission;
@@ -158,3 +160,5 @@ fn smoke_exit(mut frames: Local<u32>, mut exit: MessageWriter<AppExit>) {
         exit.write(AppExit::Success);
     }
 }
+
+mod outdoor;

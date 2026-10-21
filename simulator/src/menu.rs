@@ -261,9 +261,7 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool) {
                     }
                     label(panel, "World", 14.0, Color::srgb(0.62, 0.68, 0.70));
                     for choice in [
-                        WorldChoice::Town,
                         WorldChoice::Tiles,
-                        WorldChoice::Next,
                         #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
                         WorldChoice::Gmu,
                     ] {
@@ -431,7 +429,7 @@ mod tests {
         let next = world
             .query::<(Entity, &PickWorld)>()
             .iter(world)
-            .find(|(_, p)| p.0 == WorldChoice::Next)
+            .find(|(_, p)| p.0 == WorldChoice::Tiles)
             .unwrap()
             .0;
         *world.get_mut::<Interaction>(next).unwrap() = Interaction::Pressed;
@@ -439,7 +437,7 @@ mod tests {
         press::<LoadButton>(&mut app);
         assert_eq!(
             app.world().resource::<SimSession>().world,
-            WorldChoice::Next
+            WorldChoice::Tiles
         );
         assert_eq!(app.world().resource::<SimSession>().phase, Phase::Playing);
         assert!(app.world().contains_resource::<RebuildWorld>());

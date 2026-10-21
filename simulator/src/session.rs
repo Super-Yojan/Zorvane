@@ -19,7 +19,7 @@ impl WorldChoice {
     pub fn label(self) -> &'static str {
         match self {
             Self::Town => "Practice town",
-            Self::Tiles => "Elevation tiles",
+            Self::Tiles => "Outdoor map",
             Self::Next => "NEXT pitch",
             #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
             Self::Gmu => "NEXT - GMU Stadium",
@@ -31,16 +31,9 @@ impl WorldChoice {
         if crate::gmu::requested() {
             return Self::Gmu;
         }
-        if crate::next_competition::enabled() {
-            Self::Next
-        } else if crate::geo::GeoTileConfig::from_env()
-            .ok()
-            .is_some_and(|tiles| tiles.enabled)
-        {
-            Self::Tiles
-        } else {
-            Self::Town
-        }
+        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+        if crate::next_competition::enabled() { return Self::Gmu; }
+        Self::Tiles
     }
 }
 

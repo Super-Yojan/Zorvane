@@ -417,15 +417,7 @@ impl Shared {
                         .insert(id, Some((command, Instant::now())));
                 }
             }
-            "goal" => {
-                if let Some(command) = decode_goal(bytes) {
-                    let seq = self.goal_seq.fetch_add(1, Ordering::Relaxed) + 1;
-                    self.goals
-                        .lock()
-                        .unwrap()
-                        .insert(id, GoalInbox { seq, command });
-                }
-            }
+            "goal" | "navigation/source" | "navigation/resume" | "hardware" |
             "autonomy" | "teleop" | "safety" | "goal/decision" | "mission/report" | "search"
             | "search/action" | "search/report/ack" => {
                 let mut actions = self.actions.lock().unwrap();
@@ -1125,8 +1117,8 @@ mod tests {
             br#"{"frame":"local","x":2,"y":0}"#,
         );
         shared.receive("terra/rover", "terra/rover/fleet/size", br#"{"count":2}"#);
-        assert_eq!(shared.goals.lock().unwrap().len(), 1);
-        assert_eq!(shared.actions.lock().unwrap()[&3].len(), 1);
+        assert!(shared.goals.lock().unwrap().is_empty());
+        assert_eq!(shared.actions.lock().unwrap()[&3].len(), 2);
         assert_eq!(*shared.fleet_request.lock().unwrap(), Some(2));
         shared.disconnect();
         assert!(!shared.connected.load(Ordering::Acquire));
@@ -1800,6 +1792,7 @@ mod tests {
 }
 
 struct AutonomousRover {
+    outdoor: crate::outdoor::OutdoorSim,
     arbiter: terra_autonomy::AutonomyArbiter,
     goal_seq: u64,
     command_time: Option<Instant>,
@@ -1947,6 +1940,7 @@ fn drive_autonomy(
                 .ok()
                 .and_then(|s| serde_json::from_value(serde_json::Value::String(s)).ok());
             AutonomousRover {
+                outdoor: crate::outdoor::OutdoorSim::default(),
                 arbiter: a,
                 goal_seq: 0,
                 command_time: None,
@@ -1964,11 +1958,20 @@ fn drive_autonomy(
                 now,
             );
         }
-        if let Some(p) = patch.as_ref() {
-            tracked
-                .arbiter
-                .set_origin(p.anchor.latitude, p.anchor.longitude);
+        let mut reference = patch.as_ref().map(|p| crate::outdoor::GeoReference {
+            latitude: p.anchor.latitude, longitude: p.anchor.longitude, heading: 0.,
+        });
+        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+        if world.as_ref().is_some_and(|w| w.gmu_stadium) {
+            reference = crate::gmu::geographic_reference();
         }
+        tracked.outdoor.sensors(reference, pose, now);
+        let evidence = |tracked: &AutonomousRover| terra_autonomy::outdoor::Evidence {
+            pose, pose_ready: healthy,
+            map_ready: snapshot.is_some() && map_time.is_some_and(|t| now - t < 0.5),
+            hardware_ready: healthy, armed: tracked.outdoor.armed,
+            authority: tracked.arbiter.outdoor_authority(),
+        };
         if let Some(Some((c, received))) = remote.get(&id.0) {
             if tracked.command_time != Some(*received) {
                 tracked.command_time = Some(*received);
@@ -1993,6 +1996,11 @@ fn drive_autonomy(
                 zorvane_browser_protocol::drain_control_actions(&mut queue)
             {
                 match kind.as_str() {
+                    "navigation/source" | "navigation/resume" | "hardware" | "goal" => {
+                        let e = evidence(&tracked);
+                        tracked.outdoor.request(&kind, &bytes, received.elapsed().as_secs_f64(), now, e, &mut tracked.arbiter);
+                    }
+
                     "autonomy" => {
                         if let Some(r) = decode_level(&bytes) {
                             tracked.arbiter.set_level(r);
@@ -2092,6 +2100,8 @@ fn drive_autonomy(
                 }
             }
         }
+        let e = evidence(&tracked);
+        tracked.outdoor.guidance(now, e, &mut tracked.arbiter);
         let mut output = tracked.arbiter.step(ArbiterInput {
             now,
             pose,
@@ -2102,11 +2112,18 @@ fn drive_autonomy(
             measured,
             healthy,
         });
+        if !tracked.outdoor.armed || (tracked.outdoor.controller.selected && tracked.outdoor.controller.phase() != "planning") {
+            output.twist = Twist::default();
+            output.reset_controller = true;
+        }
+        if tracked.outdoor.controller.selected {
+            if let Some(goal) = tracked.outdoor.controller.mission_status() { output.goal = goal; }
+        }
         *command = DriveCommand {
             linear: output.twist.linear as f32,
             angular: output.twist.angular as f32,
         };
-        let hold = output.status.safety != "clear";
+        let hold = output.status.safety != "clear" || !tracked.outdoor.armed || (tracked.outdoor.controller.selected && tracked.outdoor.controller.phase() != "planning");
         if let Some(mut gate) = gate {
             gate.hold = hold;
             gate.reset = output.reset_controller;
@@ -2192,10 +2209,19 @@ fn drive_autonomy(
             outgoing
                 .goals
                 .insert(id.0, encode_status(&output.goal).unwrap());
+            outgoing.states.insert((id.0, "navigation/outdoor".into()),
+                serde_json::to_vec(&tracked.outdoor.controller.status(now, evidence(&tracked), &runtime.run_id)).unwrap());
+            if let Some(reference) = reference {
+                outgoing.states.insert((id.0, "localization".into()), serde_json::to_vec(&serde_json::json!({
+                    "version": 1, "mode": "geographic", "originLatitude": reference.latitude,
+                    "originLongitude": reference.longitude, "anchorX": 0., "anchorY": 0.,
+                    "rotation": -reference.heading.to_radians(), "simulated": true
+                })).unwrap());
+            }
             for (kind, value) in [
                 (
                     "hardware/status",
-                    serde_json::json!({"version":1,"run_id":runtime.run_id,"ready":true,"armed":true,"arming":false,"simulated":true,"reason":"Simulated actuation ready"}),
+                    serde_json::json!({"version":1,"run_id":runtime.run_id,"ready":healthy,"armed":tracked.outdoor.armed,"arming":false,"simulated":true,"reason":"Simulated actuation ready"}),
                 ),
                 (
                     "autonomy/status",
