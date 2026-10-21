@@ -19,6 +19,7 @@ impl Plugin for TerraOccupancyMapPlugin {
 #[derive(Component)]
 pub struct RoverOccupancyMap {
     pub map: LocalOccupancyMap,
+    pub config: MapConfig,
     pub last_sequence: u64,
     pub last_exposure: Option<f64>,
 }
@@ -57,12 +58,21 @@ pub(crate) fn body_pose(transform: &GlobalTransform) -> (f64, f64, f64) {
 fn update_maps(
     mut commands: Commands,
     sensors: Query<(&DepthCamera, &DepthFrame, &ChildOf)>,
-    mut rovers: Query<(Entity, &GlobalTransform, Option<&mut RoverOccupancyMap>), With<Rover>>,
+    mut rovers: Query<
+        (
+            Entity,
+            &GlobalTransform,
+            Option<&mut RoverOccupancyMap>,
+            Option<&crate::terra::RoverId>,
+        ),
+        With<Rover>,
+    >,
 ) {
-    for (entity, transform, state) in &mut rovers {
+    for (entity, transform, state, rover_id) in &mut rovers {
         if state.is_none() {
             commands.entity(entity).insert(RoverOccupancyMap {
                 map: LocalOccupancyMap::new(MapConfig::default()).unwrap(),
+                config: MapConfig::default(),
                 last_sequence: 0,
                 last_exposure: None,
             });
@@ -104,6 +114,13 @@ fn update_maps(
                 .is_ok()
             {
                 state.last_exposure = Some(exposure.timestamp);
+                crate::observation_capture::capture_depth(
+                    rover_id.map(|id| id.0).unwrap_or(entity.to_bits()),
+                    frame,
+                    &intrinsics,
+                    &state.map,
+                    &state.config,
+                );
             }
         }
     }

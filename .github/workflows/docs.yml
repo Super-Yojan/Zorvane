@@ -30,6 +30,9 @@ jobs:
         with:
           lfs: true
 
+      - name: Shared observability source
+        run: bash .github/scripts/checkout-observability.sh
+
       - name: Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -81,6 +84,9 @@ jobs:
 
       - name: Build site
         run: mkdocs build --strict
+
+      - name: Shared observability source
+        run: bash .github/scripts/checkout-observability.sh
 
       - name: Rust
         uses: dtolnay/rust-toolchain@stable

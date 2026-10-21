@@ -8,7 +8,7 @@ publish = false
 [features]
 default = ["native"]
 # Threads, Zenoh, and the voxel mesher stay on the desktop build.
-native = ["dep:zenoh", "dep:terra-transport", "dep:bevy_voxel_world", "dep:bevytiles", "gmu-viewer"]
+native = ["dep:terra-observability", "dep:zenoh", "dep:terra-transport", "dep:bevy_voxel_world", "dep:bevytiles", "gmu-viewer"]
 browser-bridge = ["bevy/webgpu"]
 gmu-viewer = ["dep:bevy_3d_tiles", "dep:bevy_3d_tiles_prepare", "dep:draco-core"]
 
@@ -17,6 +17,7 @@ name = "gmu_viewer"
 required-features = ["gmu-viewer"]
 
 [dependencies]
+terra-observability = { path = "../../Terra/crates/terra-observability", optional = true }
 zorvane-vehicle.workspace = true
 zorvane-browser-protocol.workspace = true
 web-time = "1"
@@ -54,3 +55,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 getrandom02 = { package = "getrandom", version = "0.2.17", features = ["js"] }
 getrandom03 = { package = "getrandom", version = "0.3.4", features = ["wasm_js"] }
 getrandom04 = { package = "getrandom", version = "0.4.3", features = ["wasm_js"] }
+
+[[test]]
+name = "observability"
+path = "../tests/observability.rs"

@@ -20,6 +20,9 @@ jobs:
         with:
           lfs: true
 
+      - name: Shared observability source
+        run: bash .github/scripts/checkout-observability.sh
+
       - name: Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -78,6 +81,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Shared observability source
+        run: bash .github/scripts/checkout-observability.sh
 
       - name: Rust
         uses: dtolnay/rust-toolchain@stable

@@ -1397,6 +1397,7 @@ mod tests {
                     sequence: 1,
                     received_at: 1.1,
                     rgba: vec![10, 20, 30, 255, 40, 50, 60, 255],
+                    ..Default::default()
                 },
             ))
             .id();
@@ -1834,6 +1835,7 @@ impl Default for AutonomyRuntime {
             .unwrap()
             .as_nanos();
         let run_id = format!("run-{stamp}");
+        crate::observation_capture::set_session(&run_id);
         let config = terra_experiment::MissionConfig::rescue(
             std::env::var("TERRA_MISSION_SEED")
                 .ok()
@@ -2172,6 +2174,7 @@ fn drive_autonomy(
         runtime.mission.update_pose(id.0, x, y, now);
         runtime.sequence += 1;
         let event = serde_json::json!({"kind":"control_tick","run_id":runtime.run_id,"sequence":runtime.sequence,"rover_id":id.0,"time":now,"status":output.status,"selected":output.twist,"source_command":output.intent,"pose":pose,"goal":output.goal,"proposal":output.proposal,"events":output.events,"mission":runtime.mission.status(now),"search":output.search,"clearance":clearance,"observed_free_area":observed_area});
+        crate::observability::record_tick(event.clone());
         if let Some(r) = runtime.recorder.as_ref() {
             let _ = r.record(event);
         }
@@ -2281,6 +2284,9 @@ mod autonomy_integration_tests {
             ));
         }
         app.world_mut().run_schedule(FixedUpdate);
+        // This harness invokes FixedUpdate manually; let the real command clock
+        // advance by one normal 64 Hz tick before introducing a new receipt.
+        std::thread::sleep(Duration::from_secs_f64(1.0 / 64.0));
         shared.actions.lock().unwrap().insert(
             1,
             std::collections::VecDeque::from([(
