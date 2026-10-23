@@ -106,6 +106,10 @@ impl RoverBody {
     pub(crate) fn crab_trap_collider(size: Vec3, closed: bool) -> Collider {
         let rail = 0.055;
         let bar = 0.065;
+        // A high front crossbar blocks buckets while ground-level balls still
+        // pass under it into the intake.
+        let bucket_guard_height = 0.10;
+        let bucket_guard_y = -size.y * 0.5 + 0.22;
         let mut parts = vec![
             (
                 Position::from_xyz(-(size.x - rail) * 0.5, 0.0, 0.0),
@@ -121,6 +125,11 @@ impl RoverBody {
                 Position::from_xyz(0.0, 0.0, (size.z - bar) * 0.5),
                 Rotation::default(),
                 Collider::cuboid(size.x, size.y, bar),
+            ),
+            (
+                Position::from_xyz(0.0, bucket_guard_y, -(size.z - bar) * 0.5),
+                Rotation::default(),
+                Collider::cuboid(size.x, bucket_guard_height, bar),
             ),
         ];
         if closed {
@@ -248,6 +257,21 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn crab_trap_front_blocks_buckets_but_leaves_low_ball_opening() {
+        let size = RoverPhysicsConfig::from_body(&zorvane_vehicle::CrabTrapBot)
+            .unwrap()
+            .chassis_size;
+        let open = RoverBody::crab_trap_collider(size, false);
+        let closed = RoverBody::crab_trap_collider(size, true);
+        let front_z = -(size.z - 0.065) * 0.5;
+        let bucket_height_point = Vec3::new(0.0, -size.y * 0.5 + 0.22, front_z);
+        let ball_height_point = Vec3::new(0.0, -size.y * 0.5 + 0.04, front_z);
+        assert!(open.contains_point(Vec3::ZERO, Quat::IDENTITY, bucket_height_point));
+        assert!(!open.contains_point(Vec3::ZERO, Quat::IDENTITY, ball_height_point));
+        assert!(closed.contains_point(Vec3::ZERO, Quat::IDENTITY, ball_height_point));
     }
 
     #[test]

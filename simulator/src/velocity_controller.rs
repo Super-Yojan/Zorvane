@@ -193,7 +193,7 @@ fn control_and_apply(
             });
             brain.last_vio = Some(t);
         }
-        let waiting = load.is_some_and(|load| load.waiting > 0);
+        let waiting = load.is_some_and(|load| load.needs_operator());
         if waiting || gate.is_some_and(|g| g.reset || g.hold) {
             brain.controller.reset();
         }

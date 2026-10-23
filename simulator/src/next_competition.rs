@@ -48,6 +48,9 @@ pub const TENNIS_BALL_RADIUS: f32 = 0.0335;
 pub const TENNIS_BALL_MASS: f32 = 0.058;
 pub const BALLS_PER_GOAL: usize = 36;
 pub const ROVER_BALL_CAPACITY: usize = 8;
+/// Maximum balls staged in the top-mounted dumper before a dump press.
+pub const DUMPER_CAPACITY: usize = 2;
+const DUMPER_BALL_LOCAL_Y: f32 = 0.32;
 
 /// 5-gallon bucket, from the user-supplied product diagram (inches × 0.0254).
 /// Open top. The diagram’s lid is not part of the model.
@@ -57,9 +60,13 @@ pub const BUCKET_BASE_DIAMETER: f32 = 0.3023;
 pub const BUCKET_BODY_HEIGHT: f32 = 0.3399;
 /// Shell thickness so the open top has an interior. Not on the product diagram.
 const BUCKET_WALL: f32 = 0.0025;
+/// Wider collision shell than the visible bucket wall, for reliable rover contact.
+const BUCKET_COLLIDER_WALL: f32 = 0.025;
 pub const BUCKETS_PER_HALF: usize = 10;
 /// How far inside each goal line a bucket centre must stay. Sim choice.
 pub const SPAWN_CLEARANCE: f32 = 1.6;
+/// Scoring bucket just ahead of each goal-line rover spawn.
+pub const GOAL_BUCKET_INSET: f32 = 0.9;
 pub const DEFAULT_BUCKET_SEED: u64 = 42;
 
 pub fn enabled() -> bool {
@@ -83,8 +90,9 @@ pub fn install(app: &mut App) {
         .add_systems(
             Update,
             (
-                score_hud_clicks,
-                score_world_clicks,
+                load_hud_clicks,
+                dump_hud_clicks,
+                load_world_clicks,
                 sync_waiting_markers,
                 update_score_hud,
             )
@@ -151,6 +159,18 @@ pub struct Bucket {
     pub rest: Vec3,
 }
 
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BucketSide {
+    Orange,
+    Blue,
+}
+
+impl BucketSide {
+    fn at(z: f32) -> Self {
+        if z >= 0.0 { Self::Orange } else { Self::Blue }
+    }
+}
+
 impl Bucket {
     /// Open top: a ball is inside once it has dropped through the rim.
     pub fn contains(self, point: Vec3) -> bool {
@@ -177,6 +197,17 @@ pub fn buckets(seed: u64) -> Vec<BucketPlace> {
     places
 }
 
+fn goal_bucket_place(south: bool) -> BucketPlace {
+    BucketPlace::open(
+        0.0,
+        if south {
+            PITCH_SOUTH - GOAL_BUCKET_INSET
+        } else {
+            PITCH_NORTH + GOAL_BUCKET_INSET
+        },
+    )
+}
+
 fn place_half(rng: &mut fastrand::Rng, south: bool) -> Vec<BucketPlace> {
     let margin = BUCKET_TOP_DIAMETER * 0.5 + 0.2;
     let x_min = -PITCH_HALF_WIDTH + margin;
@@ -191,7 +222,8 @@ fn place_half(rng: &mut fastrand::Rng, south: bool) -> Vec<BucketPlace> {
         .into_iter()
         .map(|ball| Vec2::new(ball.x, ball.z))
         .collect();
-    let mut points = Vec::with_capacity(BUCKETS_PER_HALF);
+    let goal = goal_bucket_place(south);
+    let mut points = vec![Vec2::new(goal.x, goal.z)];
     for _ in 0..8_000 {
         if points.len() == BUCKETS_PER_HALF {
             break;
@@ -334,21 +366,25 @@ pub struct TennisBall;
 pub struct RoverBallLoad {
     pub collected: usize,
     pub waiting: usize,
+    pub dumper: usize,
 }
 
 impl RoverBallLoad {
     pub fn count(self) -> usize {
-        self.collected + self.waiting
+        self.collected + self.waiting + self.dumper
+    }
+    pub fn needs_operator(self) -> bool {
+        self.waiting > 0 || self.dumper > 0
     }
     fn pickup(&mut self) -> bool {
-        if self.waiting > 0 || self.count() >= ROVER_BALL_CAPACITY {
+        if self.needs_operator() || self.count() >= ROVER_BALL_CAPACITY {
             return false;
         }
         self.collected += 1;
         true
     }
     fn state_label(self) -> &'static str {
-        if self.waiting > 0 {
+        if self.needs_operator() {
             "WAITING FOR OPERATOR"
         } else if self.count() >= ROVER_BALL_CAPACITY {
             "FULL: RETURN TO GOAL"
@@ -359,17 +395,20 @@ impl RoverBallLoad {
         }
     }
     fn queue_at_goal(&mut self) {
-        if self.waiting == 0 {
+        if !self.needs_operator() {
             self.waiting = std::mem::take(&mut self.collected);
         }
     }
-    fn score_one(&mut self, score: &mut NextTeamScore) -> bool {
-        if self.waiting == 0 {
+    fn load_dumper(&mut self) -> bool {
+        if self.waiting == 0 || self.dumper >= DUMPER_CAPACITY {
             return false;
         }
         self.waiting -= 1;
-        score.0 += 1;
+        self.dumper += 1;
         true
+    }
+    fn dump(&mut self) -> usize {
+        std::mem::take(&mut self.dumper)
     }
 }
 
@@ -383,7 +422,9 @@ struct WaitingMarker(Entity);
 #[derive(Component)]
 struct NextHud;
 #[derive(Component)]
-struct ScoreRover(Entity);
+struct LoadRover(Entity);
+#[derive(Component)]
+struct DumpRover(Entity);
 #[derive(Component)]
 struct TrapInstalled;
 #[derive(Component)]
@@ -394,6 +435,11 @@ struct TrapFlap {
 }
 #[derive(Component)]
 struct CarriedBall;
+#[derive(Component)]
+struct DumperBall;
+/// Released by DUMP; scored once it settles inside a bucket.
+#[derive(Component)]
+struct DumpedBall;
 #[derive(Component)]
 pub struct PitchBoard;
 /// Primary rover in the NEXT scene.
@@ -432,7 +478,8 @@ fn spawn_field_contents(
     let grass = material(materials, Color::srgb(0.18, 0.52, 0.22), 0.95);
     let line = material(materials, Color::srgb(0.95, 0.95, 0.92), 0.7);
     let board = material(materials, Color::srgb(0.90, 0.92, 0.94), 0.55);
-    let bucket_color = material(materials, Color::srgb(0.93, 0.94, 0.95), 0.45);
+    let orange_bucket = material(materials, Color::srgb(0.95, 0.38, 0.06), 0.45);
+    let blue_bucket = material(materials, Color::srgb(0.05, 0.34, 0.88), 0.45);
     let goal_color = material(materials, Color::srgb(0.95, 0.95, 0.96), 0.4);
     let ball_color = material(materials, Color::srgb(0.79, 0.95, 0.10), 0.35);
     let ball_mesh = meshes.add(Sphere::new(TENNIS_BALL_RADIUS).mesh().ico(3).unwrap());
@@ -474,16 +521,21 @@ fn spawn_field_contents(
     let shell = meshes.add(bucket_shell_mesh());
     for (index, place) in buckets(bucket_seed()).into_iter().enumerate() {
         let bucket = place.volume();
+        let side = BucketSide::at(place.z);
         commands.spawn((
             Name::new(format!("NEXT bucket {}", index + 1)),
             NextField,
             bucket,
+            side,
             RigidBody::Static,
             bucket_collider(),
             Friction::new(0.7),
             Restitution::new(0.05),
             Mesh3d(shell.clone()),
-            MeshMaterial3d(bucket_color.clone()),
+            MeshMaterial3d(match side {
+                BucketSide::Orange => orange_bucket.clone(),
+                BucketSide::Blue => blue_bucket.clone(),
+            }),
             Transform::from_xyz(place.x, 0.0, place.z),
         ));
     }
@@ -595,15 +647,15 @@ fn bucket_shell_mesh() -> Mesh {
 }
 
 fn bucket_collider() -> Collider {
-    let bottom = BUCKET_BASE_DIAMETER * 0.5 - BUCKET_WALL * 0.5;
-    let top = BUCKET_TOP_DIAMETER * 0.5 - BUCKET_WALL * 0.5;
+    let bottom = BUCKET_BASE_DIAMETER * 0.5 - BUCKET_COLLIDER_WALL * 0.5;
+    let top = BUCKET_TOP_DIAMETER * 0.5 - BUCKET_COLLIDER_WALL * 0.5;
     let wall_r = (bottom + top) * 0.5;
     let segments = 16;
     let arc = std::f32::consts::TAU * wall_r / segments as f32;
     let mut shapes = vec![(
         Position::from_xyz(0.0, BUCKET_WALL * 0.5, 0.0),
         Rotation::default(),
-        Collider::cylinder((bottom - BUCKET_WALL).max(0.02), BUCKET_WALL),
+        Collider::cylinder((bottom - BUCKET_COLLIDER_WALL).max(0.02), BUCKET_WALL),
     )];
     for index in 0..segments {
         let angle = index as f32 / segments as f32 * std::f32::consts::TAU;
@@ -614,7 +666,7 @@ fn bucket_collider() -> Collider {
                 angle.sin() * wall_r,
             ),
             Rotation::from(Quat::from_rotation_y(-angle)),
-            Collider::cuboid(BUCKET_WALL * 2.0, BUCKET_BODY_HEIGHT, arc * 1.15),
+            Collider::cuboid(BUCKET_COLLIDER_WALL, BUCKET_BODY_HEIGHT, arc * 1.15),
         ));
     }
     Collider::compound(shapes)
@@ -797,7 +849,7 @@ fn collect_crab_trap_balls(
 ) {
     let mut claimed = std::collections::HashSet::new();
     for (rover, position, rotation, mut carried) in &mut rovers {
-        if carried.waiting > 0 {
+        if carried.needs_operator() {
             for (_, parent, mut transform) in &mut flaps {
                 if parent.parent() == rover {
                     transform.rotation = Quat::IDENTITY;
@@ -868,7 +920,7 @@ fn sync_full_crab_traps(
     >,
 ) {
     for (rover, load, mut collider, closed) in &mut rovers {
-        let should_close = load.count() >= ROVER_BALL_CAPACITY || load.waiting > 0;
+        let should_close = load.count() >= ROVER_BALL_CAPACITY || load.needs_operator();
         if should_close == closed.is_some() {
             continue;
         }
@@ -907,7 +959,7 @@ fn queue_balls_at_goal(
 ) {
     for (slot, position, mut load, mut drive, mut linear, mut angular) in &mut rovers {
         if load.collected == 0
-            || load.waiting > 0
+            || load.needs_operator()
             || !at_home_goal(slot.0, position.0, physics.chassis_size)
         {
             continue;
@@ -928,32 +980,47 @@ fn operator_active(
         && session.is_none_or(|session| session.phase == crate::session::Phase::Playing)
 }
 
-fn score_rover_once(
+fn load_rover_once(
     rover: Entity,
     load: &mut RoverBallLoad,
-    score: &mut NextTeamScore,
-    carried_visuals: &Query<(Entity, &ChildOf), With<CarriedBall>>,
+    carried_visuals: &Query<
+        (Entity, &ChildOf, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
+        With<CarriedBall>,
+    >,
     commands: &mut Commands,
 ) {
-    if !load.score_one(score) {
+    if !load.load_dumper() {
         return;
     }
-    if let Some((ball, _)) = carried_visuals
+    if let Some((ball, _, mesh, material)) = carried_visuals
         .iter()
-        .find(|(_, parent)| parent.parent() == rover)
+        .find(|(_, parent, _, _)| parent.parent() == rover)
     {
         commands.entity(ball).despawn();
+        let slot = load.dumper - 1;
+        commands.entity(rover).with_children(|parent| {
+            parent.spawn((
+                Name::new("Ball in dumper"),
+                DumperBall,
+                Mesh3d(mesh.0.clone()),
+                MeshMaterial3d(material.0.clone()),
+                Transform::from_xyz(0.0, DUMPER_BALL_LOCAL_Y + slot as f32 * 0.075, 0.0),
+            ));
+        });
     }
 }
 
-fn score_hud_clicks(
+fn load_hud_clicks(
     mouse: Res<ButtonInput<MouseButton>>,
     config: Option<Res<crate::world::WorldConfig>>,
     session: Option<Res<crate::session::SimSession>>,
-    buttons: Query<(&Interaction, &ScoreRover), Changed<Interaction>>,
-    mut rovers: Query<&mut RoverBallLoad>,
-    mut score: ResMut<NextTeamScore>,
-    carried_visuals: Query<(Entity, &ChildOf), With<CarriedBall>>,
+    physics: Res<crate::physics::RoverPhysicsConfig>,
+    buttons: Query<(&Interaction, &LoadRover), Changed<Interaction>>,
+    mut rovers: Query<(&crate::terra::RoverSlot, &Position, &mut RoverBallLoad)>,
+    carried_visuals: Query<
+        (Entity, &ChildOf, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
+        With<CarriedBall>,
+    >,
     mut commands: Commands,
 ) {
     if !mouse.just_pressed(MouseButton::Left)
@@ -965,12 +1032,97 @@ fn score_hud_clicks(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        if let Ok(mut load) = rovers.get_mut(button.0) {
-            score_rover_once(
+        if let Ok((slot, position, mut load)) = rovers.get_mut(button.0) {
+            if at_home_goal(slot.0, position.0, physics.chassis_size) {
+                load_rover_once(button.0, &mut load, &carried_visuals, &mut commands);
+            }
+        }
+    }
+}
+
+fn dump_rover_once(
+    rover: Entity,
+    slot: usize,
+    load: &mut RoverBallLoad,
+    dumper_visuals: &Query<(Entity, &ChildOf), With<DumperBall>>,
+    mesh: &Handle<Mesh>,
+    material: &Handle<StandardMaterial>,
+    commands: &mut Commands,
+) {
+    let count = load.dump();
+    if count == 0 {
+        return;
+    }
+    for (ball, parent) in dumper_visuals {
+        if parent.parent() == rover {
+            commands.entity(ball).despawn();
+        }
+    }
+    let target = goal_bucket_place(slot % 2 == 0);
+    for index in 0..count {
+        commands.spawn((
+            Name::new("Dumped tennis ball"),
+            NextField,
+            TennisBall,
+            DumpedBall,
+            RigidBody::Dynamic,
+            Collider::sphere(TENNIS_BALL_RADIUS),
+            Mass(TENNIS_BALL_MASS),
+            Friction::new(0.65),
+            Restitution::new(0.05),
+            LinearDamping(0.8),
+            AngularDamping(0.8),
+            SweptCcd::default(),
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_xyz(
+                target.x + (index as f32 - (count - 1) as f32 * 0.5) * 0.05,
+                BUCKET_BODY_HEIGHT + 0.14 + index as f32 * 0.08,
+                target.z,
+            ),
+        ));
+    }
+}
+
+fn dump_hud_clicks(
+    mouse: Res<ButtonInput<MouseButton>>,
+    config: Option<Res<crate::world::WorldConfig>>,
+    session: Option<Res<crate::session::SimSession>>,
+    physics: Res<crate::physics::RoverPhysicsConfig>,
+    buttons: Query<(&Interaction, &DumpRover), Changed<Interaction>>,
+    mut rovers: Query<(&crate::terra::RoverSlot, &Position, &mut RoverBallLoad)>,
+    dumper_visuals: Query<(Entity, &ChildOf), With<DumperBall>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut ball_assets: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
+    mut commands: Commands,
+) {
+    if !mouse.just_pressed(MouseButton::Left)
+        || !operator_active(config.as_deref(), session.as_deref())
+    {
+        return;
+    }
+    for (interaction, button) in &buttons {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        if let Ok((slot, position, mut load)) = rovers.get_mut(button.0) {
+            if !at_home_goal(slot.0, position.0, physics.chassis_size) || load.dumper == 0 {
+                continue;
+            }
+            let (mesh, material) = ball_assets.get_or_insert_with(|| {
+                (
+                    meshes.add(Sphere::new(TENNIS_BALL_RADIUS).mesh().ico(3).unwrap()),
+                    materials.add(Color::srgb(0.79, 0.95, 0.10)),
+                )
+            });
+            dump_rover_once(
                 button.0,
+                slot.0,
                 &mut load,
-                &mut score,
-                &carried_visuals,
+                &dumper_visuals,
+                mesh,
+                material,
                 &mut commands,
             );
         }
@@ -1005,7 +1157,7 @@ fn ray_hits_rover(ray: Ray3d, center: Vec3, rotation: Quat, size: Vec3) -> Optio
     Some(near)
 }
 
-fn score_world_clicks(
+fn load_world_clicks(
     mouse: Res<ButtonInput<MouseButton>>,
     config: Option<Res<crate::world::WorldConfig>>,
     session: Option<Res<crate::session::SimSession>>,
@@ -1014,11 +1166,19 @@ fn score_world_clicks(
     cameras: Query<(&Camera, &GlobalTransform), With<crate::world::WorldCamera>>,
     ui: Query<&Interaction, With<Button>>,
     mut rovers: Query<
-        (Entity, &Position, &Rotation, &mut RoverBallLoad),
+        (
+            Entity,
+            &crate::terra::RoverSlot,
+            &Position,
+            &Rotation,
+            &mut RoverBallLoad,
+        ),
         With<crate::terra::Rover>,
     >,
-    mut score: ResMut<NextTeamScore>,
-    carried_visuals: Query<(Entity, &ChildOf), With<CarriedBall>>,
+    carried_visuals: Query<
+        (Entity, &ChildOf, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
+        With<CarriedBall>,
+    >,
     mut commands: Commands,
 ) {
     if !mouse.just_pressed(MouseButton::Left)
@@ -1039,7 +1199,7 @@ fn score_world_clicks(
         return;
     };
     let mut nearest = None;
-    for (rover, position, rotation, _) in &mut rovers {
+    for (rover, _, position, rotation, _) in &mut rovers {
         if let Some(distance) = ray_hits_rover(ray, position.0, rotation.0, physics.chassis_size) {
             if nearest.is_none_or(|(_, best)| distance < best) {
                 nearest = Some((rover, distance));
@@ -1047,14 +1207,10 @@ fn score_world_clicks(
         }
     }
     if let Some((rover, _)) = nearest {
-        if let Ok((_, _, _, mut load)) = rovers.get_mut(rover) {
-            score_rover_once(
-                rover,
-                &mut load,
-                &mut score,
-                &carried_visuals,
-                &mut commands,
-            );
+        if let Ok((_, slot, position, _, mut load)) = rovers.get_mut(rover) {
+            if at_home_goal(slot.0, position.0, physics.chassis_size) {
+                load_rover_once(rover, &mut load, &carried_visuals, &mut commands);
+            }
         }
     }
 }
@@ -1067,7 +1223,7 @@ fn sync_waiting_markers(
     rovers: Query<(Entity, &RoverBallLoad, Option<&WaitingMarker>), With<crate::terra::Rover>>,
 ) {
     for (rover, load, marker) in &rovers {
-        match (load.waiting > 0, marker) {
+        match (load.needs_operator(), marker) {
             (true, None) => {
                 let (mesh, material) = marker_assets.get_or_insert_with(|| {
                     (
@@ -1104,7 +1260,7 @@ fn sync_waiting_markers(
 #[derive(Default, PartialEq, Eq)]
 struct HudSnapshot {
     score: usize,
-    rows: Vec<(Entity, u64, usize, usize)>,
+    rows: Vec<(Entity, u64, usize, usize, usize)>,
 }
 
 fn update_score_hud(
@@ -1125,7 +1281,7 @@ fn update_score_hud(
     }
     let mut rows: Vec<_> = rovers
         .iter()
-        .map(|(entity, id, load)| (entity, id.0, load.collected, load.waiting))
+        .map(|(entity, id, load)| (entity, id.0, load.collected, load.waiting, load.dumper))
         .collect();
     rows.sort_by_key(|row| row.1);
     let snapshot = HudSnapshot {
@@ -1138,7 +1294,7 @@ fn update_score_hud(
     for root in &roots {
         commands.entity(root).despawn();
     }
-    let attention = snapshot.rows.iter().any(|row| row.3 > 0);
+    let attention = snapshot.rows.iter().any(|row| row.3 > 0 || row.4 > 0);
     commands
         .spawn((
             Name::new("NEXT operator score"),
@@ -1168,17 +1324,19 @@ fn update_score_hud(
                 },
                 TextColor(Color::WHITE),
             ));
-            for (rover, id, collected, waiting) in &snapshot.rows {
+            for (rover, id, collected, waiting, dumper) in &snapshot.rows {
                 let load = RoverBallLoad {
                     collected: *collected,
                     waiting: *waiting,
+                    dumper: *dumper,
                 };
-                let label = if *waiting > 0 {
+                let label = if load.needs_operator() {
                     format!(
-                        "Rover {id}: {}/{} balls\nState: {}\nCLICK TO SCORE ({waiting} left)",
+                        "Rover {id}: {}/{} balls\nState: {}\nHeld: {waiting}  Dumper: {dumper}/{}",
                         load.count(),
                         ROVER_BALL_CAPACITY,
-                        load.state_label()
+                        load.state_label(),
+                        DUMPER_CAPACITY
                     )
                 } else {
                     format!(
@@ -1190,21 +1348,21 @@ fn update_score_hud(
                 };
                 panel
                     .spawn((
-                        Button,
-                        ScoreRover(*rover),
                         Node {
                             width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(3.0),
                             padding: UiRect::all(Val::Px(6.0)),
                             ..default()
                         },
-                        BackgroundColor(if *waiting > 0 {
+                        BackgroundColor(if load.needs_operator() {
                             Color::srgb(0.78, 0.31, 0.03)
                         } else {
                             Color::srgb(0.16, 0.20, 0.22)
                         }),
                     ))
-                    .with_children(|button| {
-                        button.spawn((
+                    .with_children(|row| {
+                        row.spawn((
                             Text::new(label),
                             TextFont {
                                 font_size: bevy::text::FontSize::Px(14.0),
@@ -1212,6 +1370,48 @@ fn update_score_hud(
                             },
                             TextColor(Color::WHITE),
                         ));
+                        if *waiting > 0 && *dumper < DUMPER_CAPACITY {
+                            row.spawn((
+                                Button,
+                                LoadRover(*rover),
+                                Node {
+                                    padding: UiRect::all(Val::Px(5.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(0.28, 0.14, 0.03)),
+                            ))
+                            .with_children(|button| {
+                                button.spawn((
+                                    Text::new("LOAD 1 INTO DUMPER"),
+                                    TextColor(Color::WHITE),
+                                    TextFont {
+                                        font_size: bevy::text::FontSize::Px(13.0),
+                                        ..default()
+                                    },
+                                ));
+                            });
+                        }
+                        if *dumper > 0 {
+                            row.spawn((
+                                Button,
+                                DumpRover(*rover),
+                                Node {
+                                    padding: UiRect::all(Val::Px(5.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(0.03, 0.20, 0.45)),
+                            ))
+                            .with_children(|button| {
+                                button.spawn((
+                                    Text::new(format!("DUMP {dumper} INTO BUCKET")),
+                                    TextColor(Color::WHITE),
+                                    TextFont {
+                                        font_size: bevy::text::FontSize::Px(13.0),
+                                        ..default()
+                                    },
+                                ));
+                            });
+                        }
                     });
             }
         });
@@ -1221,7 +1421,12 @@ fn update_score_hud(
 /// Draws a ball that has crossed a bucket mouth toward the back wall so it stays deposited.
 fn settle_deposits(
     time: Res<Time<Fixed>>,
-    mut balls: Query<(&Position, &mut LinearVelocity), With<TennisBall>>,
+    mut commands: Commands,
+    mut score: Option<ResMut<NextTeamScore>>,
+    mut balls: Query<
+        (Entity, &Position, &mut LinearVelocity, Option<&DumpedBall>),
+        With<TennisBall>,
+    >,
     bins: Query<&Bucket>,
 ) {
     let dt = time.delta_secs();
@@ -1229,10 +1434,16 @@ fn settle_deposits(
         return;
     }
     let damp = (-5.0 * dt).exp();
-    for (position, mut velocity) in &mut balls {
+    for (ball, position, mut velocity, dumped) in &mut balls {
         for bucket in &bins {
             if !bucket.contains(position.0) {
                 continue;
+            }
+            if dumped.is_some() {
+                if let Some(score) = score.as_mut() {
+                    score.0 += 1;
+                    commands.entity(ball).remove::<DumpedBall>();
+                }
             }
             let to_rest = Vec3::new(bucket.rest.x - position.x, 0.0, bucket.rest.z - position.z);
             let pull = to_rest.clamp_length_max(0.25) * 8.0;
@@ -1240,6 +1451,7 @@ fn settle_deposits(
             velocity.z += pull.z * dt;
             velocity.x *= damp;
             velocity.z *= damp;
+            break;
         }
     }
 }
@@ -1307,28 +1519,36 @@ mod tests {
     }
 
     #[test]
-    fn each_pickup_and_operator_click_changes_exactly_one_ball() {
+    fn each_pickup_load_and_dump_obeys_dumper_capacity() {
         let mut first = RoverBallLoad::default();
         let mut second = RoverBallLoad::default();
-        let mut team = NextTeamScore::default();
         for _ in 0..3 {
             assert!(first.pickup());
         }
         assert!(second.pickup());
         assert_eq!(first.state_label(), "CARRYING BALLS");
-        assert_eq!((first.count(), second.count(), team.0), (3, 1, 0));
-        assert!(!first.score_one(&mut team));
+        assert_eq!((first.count(), second.count()), (3, 1));
+        assert!(!first.load_dumper());
         first.queue_at_goal();
         assert_eq!(first.state_label(), "WAITING FOR OPERATOR");
-        assert_eq!((first.collected, first.waiting, first.count()), (0, 3, 3));
+        assert_eq!((first.collected, first.waiting, first.dumper), (0, 3, 0));
         assert!(!first.pickup()); // A waiting rover cannot collect another ball.
-        assert_eq!(first.count(), 3);
-        for remaining in (0..3).rev() {
-            assert!(first.score_one(&mut team));
-            assert_eq!(first.count(), remaining);
+        for _ in 0..DUMPER_CAPACITY {
+            assert!(first.load_dumper());
         }
-        assert!(!first.score_one(&mut team));
-        assert_eq!((first.waiting, second.count(), team.0), (0, 1, 3));
+        assert!(!first.load_dumper());
+        assert_eq!(
+            (first.waiting, first.dumper, first.count()),
+            (3 - DUMPER_CAPACITY, DUMPER_CAPACITY, 3)
+        );
+        assert_eq!(first.dump(), DUMPER_CAPACITY);
+        assert_eq!(first.count(), 3 - DUMPER_CAPACITY);
+        assert_eq!(first.dump(), 0);
+        for _ in DUMPER_CAPACITY..3 {
+            assert!(first.load_dumper());
+            assert_eq!(first.dump(), 1);
+        }
+        assert_eq!((first.count(), second.count()), (0, 1));
         assert_eq!(first.state_label(), "SEARCHING");
         assert!(first.pickup()); // Normal collection resumes after the final click.
         assert_eq!(first.count(), 1);
@@ -1348,6 +1568,7 @@ mod tests {
                 RoverBallLoad {
                     collected: ROVER_BALL_CAPACITY,
                     waiting: 0,
+                    dumper: 0,
                 },
             ))
             .id();
@@ -1369,16 +1590,13 @@ mod tests {
         assert_eq!(carried.iter(app.world()).count(), 0);
         let mut load = app.world_mut().get_mut::<RoverBallLoad>(rover).unwrap();
         load.queue_at_goal();
-        let mut team = NextTeamScore::default();
-        for _ in 0..ROVER_BALL_CAPACITY {
-            assert!(
-                app.world_mut()
-                    .get_mut::<RoverBallLoad>(rover)
-                    .unwrap()
-                    .score_one(&mut team)
-            );
+        for _ in 0..ROVER_BALL_CAPACITY / DUMPER_CAPACITY {
+            let mut load = app.world_mut().get_mut::<RoverBallLoad>(rover).unwrap();
+            for _ in 0..DUMPER_CAPACITY {
+                assert!(load.load_dumper());
+            }
+            assert_eq!(load.dump(), DUMPER_CAPACITY);
         }
-        assert_eq!(team.0, ROVER_BALL_CAPACITY);
         app.world_mut().run_schedule(FixedUpdate);
         assert!(app.world().get_entity(ball).is_err());
         assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().count(), 1);
@@ -1401,6 +1619,7 @@ mod tests {
                 RoverBallLoad {
                     collected: ROVER_BALL_CAPACITY - 1,
                     waiting: 0,
+                    dumper: 0,
                 },
                 RoverBody::crab_trap_collider(physics.chassis_size, false),
             ))
@@ -1431,7 +1650,7 @@ mod tests {
                 .unwrap()
                 .shapes()
                 .len(),
-            4
+            5
         );
         let front_center = Vec3::new(0.0, 0.0, -(physics.chassis_size.z - 0.065) * 0.5);
         assert!(app.world().get::<Collider>(rover).unwrap().contains_point(
@@ -1443,23 +1662,18 @@ mod tests {
             app.world().get::<Transform>(flap).unwrap().rotation,
             Quat::IDENTITY
         );
-        let mut team = NextTeamScore::default();
         let mut load = app.world_mut().get_mut::<RoverBallLoad>(rover).unwrap();
         load.queue_at_goal();
-        assert!(load.score_one(&mut team));
+        assert!(load.load_dumper());
+        assert_eq!(load.dump(), 1);
         app.world_mut().run_schedule(FixedUpdate);
-        assert_eq!(team.0, 1);
         assert!(app.world().get::<TrapFrontClosed>(rover).is_some());
         for _ in 1..ROVER_BALL_CAPACITY {
-            assert!(
-                app.world_mut()
-                    .get_mut::<RoverBallLoad>(rover)
-                    .unwrap()
-                    .score_one(&mut team)
-            );
+            let mut load = app.world_mut().get_mut::<RoverBallLoad>(rover).unwrap();
+            assert!(load.load_dumper());
+            assert_eq!(load.dump(), 1);
         }
         app.world_mut().run_schedule(FixedUpdate);
-        assert_eq!(team.0, ROVER_BALL_CAPACITY);
         assert!(app.world().get::<TrapFrontClosed>(rover).is_none());
         assert_eq!(
             app.world()
@@ -1470,7 +1684,7 @@ mod tests {
                 .unwrap()
                 .shapes()
                 .len(),
-            3
+            4
         );
         assert!(!app.world().get::<Collider>(rover).unwrap().contains_point(
             Vec3::ZERO,
@@ -1480,33 +1694,115 @@ mod tests {
     }
 
     #[test]
-    fn one_button_press_scores_one_ball_even_while_mouse_is_held() {
+    fn one_button_press_loads_one_ball_even_while_mouse_is_held() {
         let mut app = App::new();
         app.insert_resource(WorldConfig::for_choice(crate::session::WorldChoice::Next))
+            .insert_resource(RoverPhysicsConfig::default())
             .insert_resource(NextTeamScore::default())
             .insert_resource(ButtonInput::<MouseButton>::default())
-            .add_systems(Update, score_hud_clicks);
+            .add_systems(Update, load_hud_clicks);
         let rover = app
             .world_mut()
-            .spawn(RoverBallLoad {
-                collected: 0,
-                waiting: 2,
-            })
+            .spawn((
+                crate::terra::RoverSlot(0),
+                Position(Vec3::new(0.0, 0.32, PITCH_SOUTH - 0.5)),
+                RoverBallLoad {
+                    collected: 0,
+                    waiting: 2,
+                    dumper: 0,
+                },
+            ))
             .id();
+        app.world_mut().entity_mut(rover).with_children(|parent| {
+            parent.spawn((
+                CarriedBall,
+                Mesh3d(Handle::<Mesh>::default()),
+                MeshMaterial3d(Handle::<StandardMaterial>::default()),
+                Transform::default(),
+            ));
+        });
         app.world_mut()
-            .spawn((ScoreRover(rover), Interaction::Pressed));
+            .spawn((LoadRover(rover), Interaction::Pressed));
         app.world_mut()
             .resource_mut::<ButtonInput<MouseButton>>()
             .press(MouseButton::Left);
         app.update();
         assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().waiting, 1);
-        assert_eq!(app.world().resource::<NextTeamScore>().0, 1);
+        assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().dumper, 1);
+        assert_eq!(app.world().resource::<NextTeamScore>().0, 0);
+        let mut staged = app.world_mut().query::<(&DumperBall, &Transform)>();
+        let staged_balls: Vec<_> = staged.iter(app.world()).collect();
+        assert_eq!(staged_balls.len(), 1);
+        assert!((staged_balls[0].1.translation.y - DUMPER_BALL_LOCAL_Y).abs() < 1e-5);
         app.world_mut()
             .resource_mut::<ButtonInput<MouseButton>>()
             .clear();
         app.update();
         assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().waiting, 1);
-        assert_eq!(app.world().resource::<NextTeamScore>().0, 1);
+        assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().dumper, 1);
+        assert_eq!(app.world().resource::<NextTeamScore>().0, 0);
+    }
+
+    #[test]
+    fn dump_button_releases_full_dumper_without_scoring_early() {
+        let mut app = physics_app();
+        app.insert_resource(WorldConfig::for_choice(crate::session::WorldChoice::Next))
+            .insert_resource(NextTeamScore::default())
+            .insert_resource(Assets::<Mesh>::default())
+            .insert_resource(Assets::<StandardMaterial>::default())
+            .insert_resource(ButtonInput::<MouseButton>::default())
+            .add_systems(Update, dump_hud_clicks);
+        let goal = goal_bucket_place(true);
+        app.world_mut().spawn((
+            goal.volume(),
+            RigidBody::Static,
+            bucket_collider(),
+            Transform::from_xyz(goal.x, 0.0, goal.z),
+        ));
+        let rover = app
+            .world_mut()
+            .spawn((
+                crate::terra::RoverSlot(0),
+                Position(Vec3::new(0.0, 0.32, PITCH_SOUTH - 0.5)),
+                RoverBallLoad {
+                    collected: 0,
+                    waiting: 0,
+                    dumper: DUMPER_CAPACITY,
+                },
+            ))
+            .id();
+        app.world_mut().entity_mut(rover).with_children(|parent| {
+            for _ in 0..DUMPER_CAPACITY {
+                parent.spawn((DumperBall, Transform::default()));
+            }
+        });
+        app.world_mut()
+            .spawn((DumpRover(rover), Interaction::Pressed));
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.update();
+        assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().dumper, 0);
+        assert_eq!(app.world().resource::<NextTeamScore>().0, 0);
+        assert_eq!(
+            app.world_mut()
+                .query::<&DumpedBall>()
+                .iter(app.world())
+                .count(),
+            DUMPER_CAPACITY
+        );
+        assert_eq!(
+            app.world_mut()
+                .query::<&DumperBall>()
+                .iter(app.world())
+                .count(),
+            0
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        tick(&mut app, 180);
+        assert_eq!(app.world().resource::<NextTeamScore>().0, DUMPER_CAPACITY);
     }
 
     #[test]
@@ -1523,6 +1819,7 @@ mod tests {
                 RoverBallLoad {
                     collected: 2,
                     waiting: 0,
+                    dumper: 0,
                 },
                 DriveCommand {
                     linear: 1.0,
@@ -1602,14 +1899,21 @@ mod tests {
         assert_eq!(buckets(DEFAULT_BUCKET_SEED), placed);
         assert_ne!(buckets(DEFAULT_BUCKET_SEED + 1), placed);
         let mut halves = [0usize, 0];
+        let mut goal_buckets = [0usize, 0];
         for place in &placed {
             let bucket = place.volume();
             assert!(bucket.contains(bucket.rest), "{place:?}");
             assert!(on_pitch(place.x, place.z, BUCKET_TOP_DIAMETER * 0.5));
-            assert!(
-                place.z < PITCH_SOUTH - SPAWN_CLEARANCE && place.z > PITCH_NORTH + SPAWN_CLEARANCE,
-                "bucket overlaps a goal-line spawn: {place:?}"
-            );
+            let goal = goal_bucket_place(place.z > 0.0);
+            if *place == goal {
+                goal_buckets[usize::from(place.z > 0.0)] += 1;
+            } else {
+                assert!(
+                    place.z < PITCH_SOUTH - SPAWN_CLEARANCE
+                        && place.z > PITCH_NORTH + SPAWN_CLEARANCE,
+                    "bucket overlaps a goal-line spawn: {place:?}"
+                );
+            }
             assert!(place.z.abs() > 0.5, "bucket sits on the halfway line");
             halves[usize::from(place.z > 0.0)] += 1;
             for ball in &ball_positions() {
@@ -1617,6 +1921,7 @@ mod tests {
             }
         }
         assert_eq!(halves, [BUCKETS_PER_HALF, BUCKETS_PER_HALF]);
+        assert_eq!(goal_buckets, [1, 1]);
         for pair in placed.windows(2) {
             let apart = Vec2::new(pair[0].x, pair[0].z).distance(Vec2::new(pair[1].x, pair[1].z));
             if (pair[0].z > 0.0) == (pair[1].z > 0.0) {
@@ -1688,6 +1993,29 @@ mod tests {
             world.query::<&Bucket>().iter(world).count(),
             buckets(bucket_seed()).len()
         );
+        let colored_buckets: Vec<_> = world
+            .query::<(&Bucket, &BucketSide, &MeshMaterial3d<StandardMaterial>)>()
+            .iter(world)
+            .map(|(bucket, side, material)| (bucket.center_z, *side, material.0.clone()))
+            .collect();
+        let mut side_counts = [0usize; 2];
+        for (z, side, handle) in colored_buckets {
+            assert_eq!(side, BucketSide::at(z));
+            side_counts[usize::from(side == BucketSide::Orange)] += 1;
+            let color = world
+                .resource::<Assets<StandardMaterial>>()
+                .get(&handle)
+                .unwrap()
+                .base_color;
+            assert_eq!(
+                color,
+                match side {
+                    BucketSide::Orange => Color::srgb(0.95, 0.38, 0.06),
+                    BucketSide::Blue => Color::srgb(0.05, 0.34, 0.88),
+                }
+            );
+        }
+        assert_eq!(side_counts, [BUCKETS_PER_HALF, BUCKETS_PER_HALF]);
         assert_eq!(
             world.query::<&PitchBoard>().iter(world).count(),
             pitch_boards().len()
@@ -1906,5 +2234,72 @@ mod tests {
             ended < started,
             "ball was not drawn toward the middle: start {start:?} now {position:?}"
         );
+    }
+
+    #[test]
+    fn crab_trap_cannot_drive_through_bucket_from_any_side() {
+        let physics = RoverPhysicsConfig::from_body(&zorvane_vehicle::CrabTrapBot).unwrap();
+        for direction in [Vec3::NEG_Z, Vec3::Z, Vec3::NEG_X, Vec3::X] {
+            let mut app = physics_app();
+            let bucket_position = direction * 0.8;
+            app.world_mut().spawn((
+                BucketPlace::open(bucket_position.x, bucket_position.z).volume(),
+                RigidBody::Static,
+                bucket_collider(),
+                Transform::from_translation(bucket_position),
+            ));
+            let rover = app
+                .world_mut()
+                .spawn((
+                    RoverBody::new(&physics).with_front_intake(physics.chassis_size),
+                    Transform::from_xyz(0.0, physics.chassis_size.y * 0.5 + 0.02, 0.0),
+                ))
+                .id();
+            app.world_mut().get_mut::<LinearVelocity>(rover).unwrap().0 = direction * 1.5;
+            tick(&mut app, 120);
+            let travel = app.world().get::<Position>(rover).unwrap().0.dot(direction);
+            assert!(
+                travel < 0.65,
+                "rover crossed bucket from {direction:?}: {travel}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_dumped_balls_score_after_entering_a_bucket() {
+        let mut app = physics_app();
+        app.insert_resource(NextTeamScore::default());
+        app.world_mut().spawn((
+            BucketPlace::open(0.0, 0.0).volume(),
+            RigidBody::Static,
+            bucket_collider(),
+            Transform::default(),
+        ));
+        let dumped = app
+            .world_mut()
+            .spawn((
+                TennisBall,
+                DumpedBall,
+                RigidBody::Dynamic,
+                Collider::sphere(TENNIS_BALL_RADIUS),
+                Mass(TENNIS_BALL_MASS),
+                Restitution::new(0.05),
+                SweptCcd::default(),
+                Transform::from_xyz(0.0, BUCKET_BODY_HEIGHT + 0.14, 0.0),
+            ))
+            .id();
+        assert_eq!(app.world().resource::<NextTeamScore>().0, 0);
+        tick(&mut app, 120);
+        assert_eq!(app.world().resource::<NextTeamScore>().0, 1);
+        assert!(app.world().get::<DumpedBall>(dumped).is_none());
+        app.world_mut().spawn((
+            TennisBall,
+            RigidBody::Dynamic,
+            Collider::sphere(TENNIS_BALL_RADIUS),
+            Mass(TENNIS_BALL_MASS),
+            Transform::from_xyz(0.0, BUCKET_BODY_HEIGHT + 0.14, 0.0),
+        ));
+        tick(&mut app, 120);
+        assert_eq!(app.world().resource::<NextTeamScore>().0, 1);
     }
 }

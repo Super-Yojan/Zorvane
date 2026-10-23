@@ -373,7 +373,7 @@ type RoverDriveQuery<'w, 's> = Query<
 
 pub(crate) fn drive(time: Res<Time<Fixed>>, config: Res<DriveConfig>, mut rovers: RoverDriveQuery) {
     for (command, load, mut wheels, mut pose, rotation, mut linear, mut angular) in &mut rovers {
-        let command = if load.is_some_and(|load| load.waiting > 0) {
+        let command = if load.is_some_and(|load| load.needs_operator()) {
             DriveCommand::default()
         } else {
             *command

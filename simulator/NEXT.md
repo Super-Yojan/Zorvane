@@ -1,6 +1,6 @@
 # NEXT competition practice
 
-**TL;DR.** `TERRA_NEXT=1` loads a full soccer pitch. Zatara is rover 0 on `terra-ground`. Seventy-two tennis balls near the two goals. Twenty open 5-gallon buckets. Select `crab-trap-bot` to collect balls through its front opening and score them with operator clicks at the goal.
+**TL;DR.** `TERRA_NEXT=1` loads a full soccer pitch. Zatara is rover 0 on `terra-ground`. Seventy-two tennis balls near the two goals. Twenty open 5-gallon buckets: orange on the south side and blue on the north. Select `crab-trap-bot` to collect balls and use the operator's LOAD and DUMP buttons at the goal.
 
 ![NEXT pitch](../docs/assets/next.png)
 
@@ -13,6 +13,7 @@
 Zatara starts on the south goal line, centred on the goal, facing Bevy −Z (into the field).
 A second rover starts on the north goal line facing the other way. Further rovers split across the two goals and spread along the goal line.
 Thirty-six balls rest near each goal: thirty in three rows inside the penalty area and six along its outer flanks. The middle of the pitch has no starting balls.
+One bucket on each side sits just ahead of the goal-line rover spawn for scoring; the other nine are distributed across that half.
 A ball dropped through an open bucket top is pulled toward the middle of the bucket.
 Boards run the touchlines and stop at each goal.
 
@@ -47,11 +48,11 @@ To practice collecting with the updated model:
 TERRA_NEXT=1 TERRA_ZENOH=0 ZORVANE_VEHICLE=crab-trap-bot cargo run -p zorvane
 ```
 
-The CrabTrapBot has an open-front collision frame. A ball entering the low intake, including the space behind either flap, is moved into a visible holding area inside the rover. It can hold up to eight balls. At capacity, the flaps stay shut and a physical front bar closes the chassis, so further balls remain on the field. The front stays closed while the rover waits for operator scoring, then opens again after the last ball is scored. The two simplified flap visuals swing inward as a ball approaches while space remains. Other vehicles continue to push balls.
+The CrabTrapBot has an open-front collision frame. A ball entering the low intake, including the space behind either flap, is moved into a visible holding area inside the rover. It can hold up to eight balls. At capacity, the flaps stay shut and a physical front bar closes the chassis, so further balls remain on the field. A permanent upper front guard and stronger bucket collision walls keep buckets outside the rover while tennis balls can still enter below the guard. The front stays closed while the rover waits for the operator, then opens after its last ball is dumped. The two simplified flap visuals swing inward as a ball approaches while space remains. Other vehicles continue to push balls.
 
-Each NEXT rover has an onboard ball count and a state label in the upper-right status panel: **SEARCHING**, **CARRYING BALLS**, **FULL: RETURN TO GOAL**, or **WAITING FOR OPERATOR**. A rover carrying balls returns to the goal where it spawned (even-numbered slots at the south goal, odd-numbered slots at the north goal). Inside the goal mouth, within 1 metre of its goal line, it stops and displays an orange attention marker. Its status row turns orange and says **CLICK TO SCORE**. Click the rover in the 3D view, or its status row, once per ball. Each click removes one onboard ball and adds one to the team score. Empty rover clicks do nothing. After the last click the marker clears and the rover can drive again.
+Each NEXT rover has an onboard ball count and a state label in the upper-right status panel: **SEARCHING**, **CARRYING BALLS**, **FULL: RETURN TO GOAL**, or **WAITING FOR OPERATOR**. A rover carrying balls returns to the goal where it spawned (even-numbered slots at the south goal, odd-numbered slots at the north goal). Inside the goal mouth, within 1 metre of its goal line, it stops and displays an orange attention marker. Click **LOAD 1 INTO DUMPER**, or click the rover in the 3D view, to move one held ball into the visible top dumper. Its capacity is `DUMPER_CAPACITY` (currently 2). Click **DUMP** to release all staged balls over that goal's scoring bucket. The team score rises only when a released ball enters a bucket. The rover can drive again after its last held or staged ball is dumped.
 
-This remains a one-way collection and operator-scoring approximation: the STEP model's exact panel geometry, hinge torque, physical ball contact with panels, and release into buckets are not modeled. The team's score represents confirmed operator clicks, not balls physically deposited in buckets.
+This remains a one-way collection and operator-scoring approximation: the STEP model's exact panel geometry, hinge torque, and physical ball contact with panels are not modeled. The dump chute is idealized and places released balls above the home bucket; scoring waits for the bucket contact rather than counting a button press.
 
 Startup prints a `Terra NEXT:` line with the ball and bucket counts.
 
