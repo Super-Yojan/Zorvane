@@ -13,6 +13,7 @@ use crate::bridge::AutonomyMotorGate;
 #[cfg(not(any(feature = "native", feature = "browser-bridge")))]
 #[derive(Component)]
 struct AutonomyMotorGate {
+    managed: bool,
     hold: bool,
     reset: bool,
 }
@@ -197,6 +198,10 @@ fn control_and_apply(
         if waiting || gate.is_some_and(|g| g.reset || g.hold) {
             brain.controller.reset();
         }
+        let turning = gate
+            .is_some_and(|g| g.managed)
+            .then_some(terra_control::TurningConfig::default());
+        brain.controller.set_turning_constraint(turning);
         let _ = brain.controller.set_target(VelocityTarget {
             timestamp: t,
             forward: if waiting { 0.0 } else { request.linear as f64 },

@@ -10,16 +10,16 @@ edition = "2024"
 zorvane-vehicle = { path = "crates/zorvane-vehicle" }
 zorvane-browser-protocol = { path = "crates/zorvane-browser-protocol" }
 # Shared robotics crates stay in Terra (TerraPhone and the Pi still compile them).
-# Pin the shared runtime with A* waypoint routing and L4 target search.
-terra-transport = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4b582677386b8ed7d5e430585572b83011ea7fc4" }
-terra-autonomy = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4b582677386b8ed7d5e430585572b83011ea7fc4" }
-terra-navigation = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4b582677386b8ed7d5e430585572b83011ea7fc4" }
-terra-experiment = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4b582677386b8ed7d5e430585572b83011ea7fc4" }
-terra-mapping = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4b582677386b8ed7d5e430585572b83011ea7fc4" }
-terra-types = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4b582677386b8ed7d5e430585572b83011ea7fc4" }
-terra-state = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4b582677386b8ed7d5e430585572b83011ea7fc4" }
-terra-control = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4b582677386b8ed7d5e430585572b83011ea7fc4" }
-terra-waypoint = { git = "https://github.com/Super-Yojan/Terra.git", rev = "4b582677386b8ed7d5e430585572b83011ea7fc4" }
+# Build against the same Terra workspace as the phone app.
+terra-transport = { path = "../Terra/crates/terra-transport" }
+terra-autonomy = { path = "../Terra/crates/terra-autonomy" }
+terra-navigation = { path = "../Terra/crates/terra-navigation" }
+terra-experiment = { path = "../Terra/crates/terra-experiment" }
+terra-mapping = { path = "../Terra/crates/terra-mapping" }
+terra-types = { path = "../Terra/crates/terra-types" }
+terra-state = { path = "../Terra/crates/terra-state" }
+terra-control = { path = "../Terra/crates/terra-control" }
+terra-waypoint = { path = "../Terra/crates/terra-waypoint" }
 
 [profile.dev]
 opt-level = 1

@@ -206,15 +206,30 @@ impl Outbox {
     }
 }
 
+/// Simulated counterpart of the phone's streamed motor-relay observation.
+/// Readiness describes the virtual actuator connection; autonomy holds remain
+/// on autonomy/status. Neutral output is ready to accept a new command stream.
+pub fn simulated_relay_status(
+    run_id: &str,
+    connected: bool,
+    output_active: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "run_id": run_id,
+        "control_mode": "streamed_relay",
+        "connected": connected,
+        "ready": connected,
+        "output_active": connected && output_active,
+        "fault": null,
+        "simulated": true,
+        "reason": if connected { "Simulated actuation ready" } else { "Simulator transport disconnected" },
+    })
+}
+
 // Same emergency-stop ordering as Terra, generic over the platform clock.
 pub type ControlAction<T> = (String, Vec<u8>, T);
 fn stop_token<T>(a: &ControlAction<T>) -> Option<String> {
-    if a.0 == "hardware" {
-        let v: serde_json::Value = serde_json::from_slice(&a.1).ok()?;
-        let token = v["token"].as_str()?;
-        return (v["action"] == "disarm" && (1..=64).contains(&token.len()))
-            .then(|| format!("hardware:{token}"));
-    }
     if a.0 != "safety" {
         return None;
     }
@@ -238,6 +253,19 @@ pub fn enqueue_control_action<T>(
     payload: Vec<u8>,
     received: T,
 ) {
+    if !matches!(
+        kind.as_str(),
+        "autonomy"
+            | "teleop"
+            | "safety"
+            | "goal/decision"
+            | "mission/report"
+            | "search"
+            | "search/action"
+            | "search/report/ack"
+    ) {
+        return;
+    }
     let action = (kind, payload, received);
     if let Some(token) = stop_token(&action) {
         q.retain(|a| stop_token(a).as_deref() != Some(&token));
@@ -258,4 +286,41 @@ pub fn drain_control_actions<T>(
     let mut actions = std::mem::take(q).into_iter().collect::<Vec<_>>();
     actions.sort_by_key(is_stop);
     actions
+}
+
+/// Check the transport envelope before handing a request to strict domain decoders.
+pub fn decode_remote_action(
+    kind: &str,
+    bytes: &[u8],
+    authority: Option<(&str, u64)>,
+) -> Result<Vec<u8>, &'static str> {
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| "invalid_json")?;
+    let neutral = (kind == "goal" && value["cancel"] == true)
+        || (kind == "safety" && value["action"] == "stop")
+        || (kind == "search/action"
+            && matches!(value["action"].as_str(), Some("pause" | "cancel")))
+        || matches!(kind, "search/report/ack" | "mission/report")
+        || (kind == "teleop"
+            && value["linear"].as_f64() == Some(0.)
+            && value["angular"].as_f64() == Some(0.));
+    if !neutral {
+        let (run, revision) = authority.ok_or("authority_unavailable")?;
+        if value["run_id"].as_str() != Some(run)
+            || value["authority_revision"].as_u64() != Some(revision)
+        {
+            return Err("authority_mismatch");
+        }
+    }
+    let object = value.as_object_mut().ok_or("invalid_request")?;
+    match kind {
+        "autonomy" | "safety" | "goal" => {
+            object.remove("run_id");
+            object.remove("authority_revision");
+        }
+        "goal/decision" | "search" | "search/action" | "search/report/ack" => {
+            object.remove("authority_revision");
+        }
+        _ => {}
+    }
+    serde_json::to_vec(&value).map_err(|_| "invalid_json")
 }

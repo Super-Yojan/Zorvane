@@ -376,6 +376,7 @@ struct Shared {
     commands: Mutex<BTreeMap<u64, LeasedCommand>>,
     goals: Mutex<BTreeMap<u64, GoalInbox>>,
     actions: Mutex<BTreeMap<u64, std::collections::VecDeque<(String, Vec<u8>, Instant)>>>,
+    authorities: Mutex<BTreeMap<u64, (String, u64)>>,
     goal_seq: std::sync::atomic::AtomicU64,
     epoch: std::sync::atomic::AtomicU64,
     fleet_request: Mutex<Option<usize>>,
@@ -408,6 +409,35 @@ impl Shared {
         if !self.commands.lock().unwrap().contains_key(&id) {
             return;
         }
+        let normalized;
+        let bytes = if matches!(
+            kind,
+            "goal"
+                | "autonomy"
+                | "teleop"
+                | "safety"
+                | "goal/decision"
+                | "mission/report"
+                | "search"
+                | "search/action"
+                | "search/report/ack"
+        ) {
+            let authorities = self.authorities.lock().unwrap();
+            let authority = authorities
+                .get(&id)
+                .map(|(run, revision)| (run.as_str(), *revision));
+            normalized =
+                match zorvane_browser_protocol::decode_remote_action(kind, bytes, authority) {
+                    Ok(payload) => payload,
+                    Err(reason) => {
+                        eprintln!("Rover {id}: rejected {kind}: {reason}");
+                        return;
+                    }
+                };
+            normalized.as_slice()
+        } else {
+            bytes
+        };
         match kind {
             "cmd_vel" => {
                 if let Some(command) = decode_command(bytes) {
@@ -448,6 +478,7 @@ impl Shared {
             .unwrap()
             .values_mut()
             .for_each(|slot| *slot = None);
+        self.authorities.lock().unwrap().clear();
         self.goals.lock().unwrap().clear();
         self.actions.lock().unwrap().clear();
         *self.fleet_request.lock().unwrap() = None;
@@ -1811,6 +1842,7 @@ struct AutonomousRover {
 }
 #[derive(Component, Default)]
 pub(crate) struct AutonomyMotorGate {
+    pub managed: bool,
     pub hold: bool,
     pub reset: bool,
 }
@@ -1976,7 +2008,7 @@ fn drive_autonomy(
                 tracked.command_time = Some(*received);
                 let age = received.elapsed().as_secs_f64();
                 if age < 0.5 {
-                    tracked.arbiter.accept_operator(
+                    tracked.arbiter.accept_operator_from(
                         TeleopRequest {
                             linear: c.linear as f64,
                             angular: c.angular as f64,
@@ -1986,6 +2018,7 @@ fn drive_autonomy(
                             sequence: None,
                         },
                         now - age,
+                        terra_autonomy::CommandOrigin::FleetTeleop,
                     );
                 }
             }
@@ -2002,9 +2035,11 @@ fn drive_autonomy(
                     }
                     "teleop" => {
                         if let Some(r) = decode_teleop(&bytes) {
-                            tracked
-                                .arbiter
-                                .accept_operator(r, now - received.elapsed().as_secs_f64());
+                            tracked.arbiter.accept_operator_from(
+                                r,
+                                now - received.elapsed().as_secs_f64(),
+                                terra_autonomy::CommandOrigin::FleetTeleop,
+                            );
                         }
                     }
                     "safety" => {
@@ -2104,16 +2139,25 @@ fn drive_autonomy(
             measured,
             healthy,
         });
+        bridge
+            .shared
+            .authorities
+            .lock()
+            .unwrap()
+            .insert(id.0, (output.status.run_id.clone(), output.status.revision));
         *command = DriveCommand {
             linear: output.twist.linear as f32,
             angular: output.twist.angular as f32,
         };
         let hold = output.status.safety != "clear";
+        let managed = output.command_origin != terra_autonomy::CommandOrigin::LocalManual;
         if let Some(mut gate) = gate {
+            gate.managed = managed;
             gate.hold = hold;
             gate.reset = output.reset_controller;
         } else {
             entities.entity(entity).insert(AutonomyMotorGate {
+                managed,
                 hold,
                 reset: output.reset_controller,
             });
@@ -2198,7 +2242,16 @@ fn drive_autonomy(
             for (kind, value) in [
                 (
                     "hardware/status",
-                    serde_json::json!({"version":1,"run_id":runtime.run_id,"ready":true,"armed":true,"arming":false,"simulated":true,"reason":"Simulated actuation ready"}),
+                    zorvane_browser_protocol::simulated_relay_status(
+                        &runtime.run_id,
+                        connected,
+                        !hold
+                            && !output.reset_controller
+                            && control
+                                .map_or(command.linear != 0.0 || command.angular != 0.0, |state| {
+                                    state.output.left != 0.0 || state.output.right != 0.0
+                                }),
+                    ),
                 ),
                 (
                     "autonomy/status",
@@ -2259,6 +2312,12 @@ fn drive_autonomy(
     }
     runtime.rovers.retain(|id, _| seen.contains(id));
     runtime.occupancy_gates.retain(|id, _| seen.contains(id));
+    bridge
+        .shared
+        .authorities
+        .lock()
+        .unwrap()
+        .retain(|id, _| seen.contains(id));
 }
 
 #[cfg(all(test, feature = "native"))]
