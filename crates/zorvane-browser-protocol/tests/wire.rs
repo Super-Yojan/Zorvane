@@ -121,6 +121,25 @@ fn emergency_stop_survives_control_queue_pressure_and_runs_last() {
 }
 
 #[test]
+fn hardware_disarm_survives_control_queue_pressure_and_runs_last() {
+    use std::collections::VecDeque;
+    let mut queue = VecDeque::new();
+    enqueue_control_action(
+        &mut queue,
+        "hardware".into(),
+        br#"{"action":"disarm","token":"h1"}"#.to_vec(),
+        0,
+    );
+    for i in 1..300 {
+        enqueue_control_action(&mut queue, "teleop".into(), b"{}".to_vec(), i);
+    }
+    let actions = drain_control_actions(&mut queue);
+    assert_eq!(actions.len(), 256);
+    assert_eq!(actions.last().unwrap().0, "hardware");
+    assert!(queue.is_empty());
+}
+
+#[test]
 fn a_new_occupancy_baseline_removes_an_old_pending_heartbeat() {
     let mut queue = Outbox::default();
     queue

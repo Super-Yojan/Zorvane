@@ -1,6 +1,8 @@
 //! Standalone visual-only GMU tile viewer. No robotics bridge or sensor plugins.
 #[path = "../src/gmu/draco.rs"]
 mod native_draco;
+#[path = "../src/maps_key.rs"]
+mod maps_key;
 use bevy::{input::mouse::AccumulatedMouseScroll, prelude::*};
 use bevy_3d_tiles::{
     EcefOrigin, P3dtParams, TilePrepareHook, Tiles3dAttach, Tiles3dCamera, Tiles3dConfig,
@@ -64,8 +66,8 @@ fn main() {
     let key = if offline {
         None
     } else {
-        match std::env::var("GOOGLE_MAPS_API_KEY") {
-            Ok(key) if !key.trim().is_empty() => Some(key.trim().to_owned()),
+        match maps_key::load() {
+            Some(key) => Some(key),
             _ => {
                 eprintln!("GOOGLE_MAPS_API_KEY is missing.\n{HELP}");
                 std::process::exit(2);

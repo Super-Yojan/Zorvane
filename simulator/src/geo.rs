@@ -39,7 +39,7 @@ const BUNDLE_ZOOM: u8 = 15;
 const BUNDLE_X: i32 = 9347;
 const BUNDLE_Z: i32 = 12543;
 #[cfg(feature = "native")]
-const BUNDLE_PNG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/geo/terrarium.png");
+const BUNDLE_PNG: &[u8] = include_bytes!("../assets/geo/terrarium.png");
 
 /// George W. Johnson Center, George Mason University Fairfax campus.
 /// Published location 38.8297 N, 77.3075 W. The bundled Terrarium PNG is this
@@ -552,7 +552,7 @@ fn seed_bundle(cache: &Path, tiles: &[TileRef]) -> Result<(), String> {
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
             }
-            std::fs::copy(BUNDLE_PNG, &dest)
+            std::fs::write(&dest, BUNDLE_PNG)
                 .map_err(|error| format!("copy bundled elevation tile: {error}"))?;
         }
     }

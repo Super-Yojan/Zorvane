@@ -38,4 +38,5 @@ rm -rf "$build_workspace"
 trap - EXIT HUP INT TERM
 cd "$simulator_root"
 export ZORVANE_ASSETS="$simulator_root/simulator/assets"
+export TERRA_TILE_CACHE="${TERRA_TILE_CACHE:-$simulator_root/simulator/.cache/tiles}"
 exec "$simulator_root/target/local-terra-bin/zorvane"

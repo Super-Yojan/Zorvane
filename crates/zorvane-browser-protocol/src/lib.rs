@@ -230,6 +230,12 @@ pub fn simulated_relay_status(
 // Same emergency-stop ordering as Terra, generic over the platform clock.
 pub type ControlAction<T> = (String, Vec<u8>, T);
 fn stop_token<T>(a: &ControlAction<T>) -> Option<String> {
+    if a.0 == "hardware" {
+        let v: serde_json::Value = serde_json::from_slice(&a.1).ok()?;
+        let token = v["token"].as_str()?;
+        return (v["action"] == "disarm" && (1..=64).contains(&token.len()))
+            .then(|| format!("hardware:{token}"));
+    }
     if a.0 != "safety" {
         return None;
     }
@@ -260,6 +266,7 @@ pub fn enqueue_control_action<T>(
             | "navigation/settings"
             | "navigation/source"
             | "navigation/resume"
+            | "hardware"
             | "teleop"
             | "safety"
             | "goal/decision"

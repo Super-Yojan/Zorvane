@@ -424,6 +424,7 @@ impl Shared {
                 | "navigation/settings"
                 | "navigation/source"
                 | "navigation/resume"
+                | "hardware"
                 | "search"
                 | "search/action"
                 | "search/report/ack"
@@ -1812,6 +1813,8 @@ mod tests {
 }
 
 struct AutonomousRover {
+    /// Starts armed, matching the outdoor simulator. An explicit hardware disarm clears it.
+    armed: bool,
     near_miss: terra_experiment::NearMiss,
     contacts: std::collections::BTreeSet<Entity>,
     observed_area: terra_experiment::ObservedArea,
@@ -1872,10 +1875,77 @@ impl Default for AutonomyRuntime {
         }
     }
 }
+/// Hardware arm/disarm from the outdoor adapter. Disarm stops on this tick.
+/// Arm requires a fresh unreplayed token, the current run, and navigation authority.
+/// Source changes, resume, and goals stay on the shared runtime.
+fn apply_hardware_command(
+    rt: &mut terra_runtime::Runtime,
+    bytes: &[u8],
+    age: f64,
+    armed: &mut bool,
+) {
+    let reject = |rt: &mut terra_runtime::Runtime, reason: &str| {
+        rt.outdoor.result = Some(format!("rejected: {reason}"));
+    };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        reject(rt, "invalid_json");
+        return;
+    };
+    if v["action"] == "disarm" {
+        *armed = false;
+        rt.outdoor.pause("disarmed");
+        rt.autonomy.clear_guidance();
+        rt.outdoor.result = Some("accepted".into());
+        return;
+    }
+    if !age.is_finite()
+        || !(0.0..terra_types::timing::CONTROL_REQUEST_FRESHNESS_SECONDS).contains(&age)
+    {
+        reject(rt, "request_expired");
+        return;
+    }
+    let Some(token) = v["token"].as_str() else {
+        reject(rt, "missing_token");
+        return;
+    };
+    if !terra_autonomy::valid_token(token) || rt.outdoor_tokens.iter().any(|t| t == token) {
+        reject(rt, "invalid_or_replayed_token");
+        return;
+    }
+    if rt.outdoor_tokens.len() == 128 {
+        rt.outdoor_tokens.pop_front();
+    }
+    rt.outdoor_tokens.push_back(token.to_owned());
+    rt.outdoor.token = Some(token.to_owned());
+    if v["run_id"] != rt.autonomy.run_id {
+        reject(rt, "run_changed");
+        return;
+    }
+    if v["action"] != "arm" {
+        reject(rt, "arm_rejected");
+        return;
+    }
+    let Some(revision) = v["authority_revision"].as_u64() else {
+        reject(rt, "revision_missing");
+        return;
+    };
+    let pose = rt.pose.unwrap_or_default().0;
+    let run_id = rt.autonomy.run_id.clone();
+    if !rt
+        .autonomy
+        .navigation_configuration_allowed(&run_id, revision, pose)
+    {
+        reject(rt, "arm_rejected");
+        return;
+    }
+    *armed = true;
+    rt.outdoor.result = Some("accepted".into());
+}
 #[allow(clippy::type_complexity)]
 fn drive_autonomy(
     bridge: Res<Bridge>,
     time: Res<Time<Fixed>>,
+    world: Option<Res<crate::world::WorldConfig>>,
     patch: Option<Res<crate::geo::GeoPatch>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
     mut entities: Commands,
@@ -1953,13 +2023,14 @@ fn drive_autonomy(
             .rovers
             .remove(&id.0)
             .unwrap_or_else(|| AutonomousRover {
+                armed: true,
                 near_miss: Default::default(),
                 contacts: Default::default(),
                 observed_area: Default::default(),
                 detector_frame: None,
             });
         let pose = rt.pose.unwrap_or_default().0;
-        let (x, y, yaw) = (pose.x, pose.y, pose.yaw);
+        let (x, y, _) = (pose.x, pose.y, pose.yaw);
         let snapshot = map.map(|m| m.map.snapshot());
         let map_time = map.and_then(|m| m.last_exposure);
         if let (Some(snapshot), Some(timestamp)) = (snapshot.as_ref(), map_time) {
@@ -1970,42 +2041,55 @@ fn drive_autonomy(
                 received_at: now,
             });
         }
-        let hardware =
-            zorvane_browser_protocol::simulated_relay_status(&runtime.run_id, true, output_active);
-        let _ = rt.ingest(terra_runtime::RuntimeEvent::Hardware {
-            status: hardware,
-            received_at: now,
+        let mut geo_reference = patch.as_ref().map(|p| crate::outdoor::GeoReference {
+            latitude: p.anchor.latitude,
+            longitude: p.anchor.longitude,
+            heading: 0.,
         });
-        if let Some(p) = patch.as_ref() {
+        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+        if world.as_ref().is_some_and(|w| w.gmu_stadium) {
+            geo_reference = crate::gmu::geographic_reference();
+        }
+        #[cfg(not(all(feature = "gmu-viewer", not(target_arch = "wasm32"))))]
+        let _ = &world;
+        rt.outdoor.supported = geo_reference.is_some();
+        if let Some(reference) = geo_reference {
             rt.autonomy
-                .set_origin(p.anchor.latitude, p.anchor.longitude);
-            if let Ok(origin) =
-                terra_waypoint::GeoOrigin::new(p.anchor.latitude, p.anchor.longitude)
-            {
-                let (latitude, longitude) = origin.from_local(x, y);
-                let _ = rt.ingest(terra_runtime::RuntimeEvent::Gps {
-                    sample: terra_autonomy::outdoor::GpsFix {
-                        timestamp: now,
-                        latitude,
-                        longitude,
-                        accuracy: 1.0,
-                    },
-                    received_at: now,
-                });
-                let _ = rt.ingest(terra_runtime::RuntimeEvent::Heading {
-                    sample: terra_autonomy::outdoor::HeadingFix {
-                        timestamp: now,
-                        true_heading: (90.0 - yaw.to_degrees()).rem_euclid(360.0),
-                        accuracy: 1.0,
-                    },
-                    received_at: now,
-                });
-            }
+                .set_origin(reference.latitude, reference.longitude);
+            let (latitude, longitude, true_heading) = reference.sample(pose);
+            let _ = rt.ingest(terra_runtime::RuntimeEvent::Gps {
+                sample: terra_autonomy::outdoor::GpsFix {
+                    timestamp: now,
+                    latitude,
+                    longitude,
+                    accuracy: 1.0,
+                },
+                received_at: now,
+            });
+            let _ = rt.ingest(terra_runtime::RuntimeEvent::Heading {
+                sample: terra_autonomy::outdoor::HeadingFix {
+                    timestamp: now,
+                    true_heading,
+                    accuracy: 1.0,
+                },
+                received_at: now,
+            });
+        } else {
+            rt.outdoor.invalidate_sensors();
         }
         if let Some(mut queue) = actions.remove(&id.0) {
             for (kind, payload, received) in
                 zorvane_browser_protocol::drain_control_actions(&mut queue)
             {
+                if kind == "hardware" {
+                    apply_hardware_command(
+                        rt,
+                        &payload,
+                        received.elapsed().as_secs_f64(),
+                        &mut tracked.armed,
+                    );
+                    continue;
+                }
                 if kind == "mission/report" {
                     if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&payload) {
                         if let Some(target) = v["survivor_id"].as_u64() {
@@ -2021,6 +2105,16 @@ fn drive_autonomy(
                 });
             }
         }
+        let mut hardware = zorvane_browser_protocol::simulated_relay_status(
+            &runtime.run_id,
+            tracked.armed,
+            output_active,
+        );
+        hardware["armed"] = serde_json::json!(tracked.armed);
+        let _ = rt.ingest(terra_runtime::RuntimeEvent::Hardware {
+            status: hardware,
+            received_at: now,
+        });
         if space {
             rt.autonomy.hold_emergency_stop();
         }
@@ -2059,7 +2153,19 @@ fn drive_autonomy(
         };
         let runtime_status = runtime_output.snapshot.value.clone();
         let mut output = runtime_output.autonomy;
-        let motor = runtime_output.motor;
+        let mut motor = runtime_output.motor;
+        let outdoor_hold = rt.outdoor.selected && rt.outdoor.phase() != "planning";
+        if !tracked.armed || outdoor_hold {
+            output.twist.linear = 0.0;
+            output.twist.angular = 0.0;
+            output.reset_controller = true;
+            rt.controller.reset();
+            motor.left = 0.0;
+            motor.right = 0.0;
+            motor.target_forward = 0.0;
+            motor.target_yaw_rate = 0.0;
+            motor.stop_reason = terra_types::StopReason::None;
+        }
         for event in runtime_output.events {
             let event = serde_json::json!({"kind":"runtime.event","event":event,"run_id":runtime.run_id,"rover_id":id.0,"time":now});
             crate::observability::record_tick(event.clone());
@@ -2077,7 +2183,7 @@ fn drive_autonomy(
             linear: output.twist.linear as f32,
             angular: output.twist.angular as f32,
         };
-        let hold = output.status.safety != "clear";
+        let hold = output.status.safety != "clear" || !tracked.armed || outdoor_hold;
         let managed = output.command_origin != terra_autonomy::CommandOrigin::LocalManual;
         if let Some(mut gate) = gate {
             gate.managed = managed;
@@ -2167,16 +2273,40 @@ fn drive_autonomy(
             outgoing
                 .goals
                 .insert(id.0, encode_status(&output.goal).unwrap());
+            outgoing.states.insert(
+                (id.0, "navigation/outdoor".into()),
+                serde_json::to_vec(&runtime_status["outdoor"]).unwrap(),
+            );
+            if let Some(reference) = geo_reference {
+                outgoing.states.insert(
+                    (id.0, "localization".into()),
+                    serde_json::to_vec(&serde_json::json!({
+                        "version": 1,
+                        "mode": "geographic",
+                        "originLatitude": reference.latitude,
+                        "originLongitude": reference.longitude,
+                        "anchorX": 0.0,
+                        "anchorY": 0.0,
+                        "rotation": -reference.heading.to_radians(),
+                        "simulated": true
+                    }))
+                    .unwrap(),
+                );
+            }
             for (kind, value) in [
                 (
                     "hardware/status",
-                    zorvane_browser_protocol::simulated_relay_status(
-                        &runtime.run_id,
-                        connected,
-                        !hold
-                            && !output.reset_controller
-                            && (motor.left != 0.0 || motor.right != 0.0),
-                    ),
+                    {
+                        let mut status = zorvane_browser_protocol::simulated_relay_status(
+                            &runtime.run_id,
+                            connected && tracked.armed,
+                            !hold
+                                && !output.reset_controller
+                                && (motor.left != 0.0 || motor.right != 0.0),
+                        );
+                        status["armed"] = serde_json::json!(tracked.armed);
+                        status
+                    },
                 ),
                 ("autonomy/status", {
                     let mut value = serde_json::to_value(&output.status).unwrap();
@@ -2395,5 +2525,111 @@ mod autonomy_integration_tests {
             shared.outgoing.lock().unwrap().states[&(1, "autonomy/status".into())].clone();
         let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
         assert_eq!(value["safety"], "emergency_stop");
+    }
+
+    #[test]
+    fn hardware_disarm_holds_motion_until_a_fresh_arm() {
+        let shared = Arc::new(Shared::default());
+        shared.connected.store(true, Ordering::Release);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Bridge {
+                shared: shared.clone(),
+            })
+            .add_systems(FixedUpdate, drive_autonomy);
+        shared.commands.lock().unwrap().insert(1, None);
+        let rt = terra_runtime::Runtime::new(
+            terra_runtime::RuntimeConfig {
+                mode: terra_runtime::ActuationMode::DirectEffort,
+                ..Default::default()
+            },
+            "test-1".into(),
+        )
+        .unwrap();
+        app.world_mut().spawn((
+            Rover,
+            RoverId(1),
+            ZenohControlled,
+            Transform::default(),
+            DriveCommand::default(),
+            crate::velocity_controller::VelocityControlState::new(rt),
+        ));
+        let step = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<Time<Fixed>>()
+                .advance_by(Duration::from_millis(10));
+            app.world_mut().run_schedule(FixedUpdate);
+        };
+        let linear = |app: &mut App| {
+            let mut q = app.world_mut().query::<(&RoverId, &DriveCommand)>();
+            q.iter(app.world())
+                .find(|(id, _)| id.0 == 1)
+                .unwrap()
+                .1
+                .linear
+        };
+        step(&mut app);
+        let (run, revision) = shared.authorities.lock().unwrap()[&1].clone();
+        let teleop = |sequence: u64, revision: u64| {
+            serde_json::to_vec(&serde_json::json!({
+                "linear": 0.3,
+                "angular": 0.0,
+                "run_id": run,
+                "authority_revision": revision,
+                "operator_session_id": "test",
+                "sequence": sequence
+            }))
+            .unwrap()
+        };
+        shared.receive("terra/rover", "terra/rover/1/teleop", &teleop(1, revision));
+        step(&mut app);
+        assert_eq!(linear(&mut app), 0.3);
+        shared.receive(
+            "terra/rover",
+            "terra/rover/1/hardware",
+            br#"{"action":"disarm","token":"disarm-1"}"#,
+        );
+        step(&mut app);
+        assert_eq!(linear(&mut app), 0.0);
+        let status = shared.outgoing.lock().unwrap().states[&(1, "hardware/status".into())].clone();
+        let status: serde_json::Value = serde_json::from_slice(&status).unwrap();
+        assert_eq!(status["armed"], false);
+        assert_eq!(status["ready"], false);
+        let (_run_after, revision_after) = shared.authorities.lock().unwrap()[&1].clone();
+        let rejected = serde_json::to_vec(&serde_json::json!({
+            "action": "arm",
+            "token": "arm-stale",
+            "run_id": "other-run",
+            "authority_revision": revision_after
+        }))
+        .unwrap();
+        shared.receive("terra/rover", "terra/rover/1/hardware", &rejected);
+        shared.receive(
+            "terra/rover",
+            "terra/rover/1/teleop",
+            &teleop(2, revision_after),
+        );
+        step(&mut app);
+        assert_eq!(
+            linear(&mut app),
+            0.0,
+            "a rejected arm must leave the rover disarmed"
+        );
+        let (run_armed, revision_armed) = shared.authorities.lock().unwrap()[&1].clone();
+        let arm = serde_json::to_vec(&serde_json::json!({
+            "action": "arm",
+            "token": "arm-1",
+            "run_id": run_armed,
+            "authority_revision": revision_armed
+        }))
+        .unwrap();
+        shared.receive("terra/rover", "terra/rover/1/hardware", &arm);
+        shared.receive(
+            "terra/rover",
+            "terra/rover/1/teleop",
+            &teleop(3, revision_armed),
+        );
+        step(&mut app);
+        assert_eq!(linear(&mut app), 0.3);
     }
 }
