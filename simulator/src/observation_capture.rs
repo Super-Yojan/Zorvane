@@ -46,7 +46,7 @@ pub fn capture_depth(
     rover: u64,
     frame: &crate::depth_camera::DepthFrame,
     k: &terra_mapping::CameraIntrinsics,
-    map: &terra_mapping::LocalOccupancyMap,
+    map: &terra_runtime::mapping::MappingState,
     config: &terra_mapping::MapConfig,
 ) {
     use std::sync::Mutex;
@@ -109,7 +109,7 @@ pub fn capture_depth(
     _: u64,
     _: &crate::depth_camera::DepthFrame,
     _: &terra_mapping::CameraIntrinsics,
-    _: &terra_mapping::LocalOccupancyMap,
+    _: &terra_runtime::mapping::MappingState,
     _: &terra_mapping::MapConfig,
 ) {
 }
@@ -143,7 +143,7 @@ pub fn capture_rgb(rover: u64, frame: &crate::rgb_camera::RgbFrame) {
 pub fn capture_rgb(_: u64, _: &crate::rgb_camera::RgbFrame) {}
 
 #[cfg(feature = "native")]
-fn capture_map(rover: u64, time: f64, revision: u64, map: &terra_mapping::LocalOccupancyMap) {
+fn capture_map(rover: u64, time: f64, revision: u64, map: &terra_runtime::mapping::MappingState) {
     use std::sync::Mutex;
     static LAST_MAP: OnceLock<Mutex<std::collections::BTreeMap<u64, f64>>> = OnceLock::new();
     let Ok(mut last) = LAST_MAP.get_or_init(Default::default).try_lock() else {

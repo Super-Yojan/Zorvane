@@ -256,6 +256,10 @@ pub fn enqueue_control_action<T>(
     if !matches!(
         kind.as_str(),
         "autonomy"
+            | "goal"
+            | "navigation/settings"
+            | "navigation/source"
+            | "navigation/resume"
             | "teleop"
             | "safety"
             | "goal/decision"
@@ -286,41 +290,4 @@ pub fn drain_control_actions<T>(
     let mut actions = std::mem::take(q).into_iter().collect::<Vec<_>>();
     actions.sort_by_key(is_stop);
     actions
-}
-
-/// Check the transport envelope before handing a request to strict domain decoders.
-pub fn decode_remote_action(
-    kind: &str,
-    bytes: &[u8],
-    authority: Option<(&str, u64)>,
-) -> Result<Vec<u8>, &'static str> {
-    let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| "invalid_json")?;
-    let neutral = (kind == "goal" && value["cancel"] == true)
-        || (kind == "safety" && value["action"] == "stop")
-        || (kind == "search/action"
-            && matches!(value["action"].as_str(), Some("pause" | "cancel")))
-        || matches!(kind, "search/report/ack" | "mission/report")
-        || (kind == "teleop"
-            && value["linear"].as_f64() == Some(0.)
-            && value["angular"].as_f64() == Some(0.));
-    if !neutral {
-        let (run, revision) = authority.ok_or("authority_unavailable")?;
-        if value["run_id"].as_str() != Some(run)
-            || value["authority_revision"].as_u64() != Some(revision)
-        {
-            return Err("authority_mismatch");
-        }
-    }
-    let object = value.as_object_mut().ok_or("invalid_request")?;
-    match kind {
-        "autonomy" | "safety" | "goal" => {
-            object.remove("run_id");
-            object.remove("authority_revision");
-        }
-        "goal/decision" | "search" | "search/action" | "search/report/ack" => {
-            object.remove("authority_revision");
-        }
-        _ => {}
-    }
-    serde_json::to_vec(&value).map_err(|_| "invalid_json")
 }

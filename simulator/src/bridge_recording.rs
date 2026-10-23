@@ -34,10 +34,7 @@ impl Recorder {
             #[cfg(feature = "native")]
             Self::Native(recorder) => recorder.failed(),
             #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
-            Self::Browser(shared) => {
-                !shared.recording.healthy.load(Ordering::Acquire)
-                    || shared.recording.failed.load(Ordering::Acquire)
-            }
+            Self::Browser(shared) => shared.recording.failed.load(Ordering::Acquire),
         }
     }
 
@@ -47,9 +44,7 @@ impl Recorder {
             Self::Native(recorder) => recorder.record(event),
             #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
             Self::Browser(shared) => {
-                if !shared.connected.load(Ordering::Acquire)
-                    || shared.recording.failed.load(Ordering::Acquire)
-                {
+                if shared.recording.failed.load(Ordering::Acquire) {
                     return Err(std::io::Error::other("browser recorder unavailable"));
                 }
                 let mut queue = shared.recording.events.lock().unwrap();

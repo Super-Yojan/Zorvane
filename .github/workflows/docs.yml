@@ -30,8 +30,8 @@ jobs:
         with:
           lfs: true
 
-      - name: Shared observability source
-        run: bash .github/scripts/checkout-observability.sh
+      - name: Shared Terra source
+        run: bash .github/scripts/checkout-terra.sh
 
       - name: Rust
         uses: dtolnay/rust-toolchain@stable
@@ -85,8 +85,8 @@ jobs:
       - name: Build site
         run: mkdocs build --strict
 
-      - name: Shared observability source
-        run: bash .github/scripts/checkout-observability.sh
+      - name: Shared Terra source
+        run: bash .github/scripts/checkout-terra.sh
 
       - name: Rust
         uses: dtolnay/rust-toolchain@stable

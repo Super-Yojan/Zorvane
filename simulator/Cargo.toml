@@ -17,6 +17,7 @@ name = "gmu_viewer"
 required-features = ["gmu-viewer"]
 
 [dependencies]
+terra-runtime.workspace = true
 terra-observability = { path = "../../Terra/crates/terra-observability", optional = true }
 zorvane-vehicle.workspace = true
 zorvane-browser-protocol.workspace = true
