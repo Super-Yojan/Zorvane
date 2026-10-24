@@ -7,8 +7,8 @@ description: NEXT 2026 on Field 3, West Campus. Collect tennis balls, load them 
 The field follows the *NEXT Competition 2026 Rules* (August 7, 2026). Red's Base is behind the south goal, Blue's behind the north.
 
 <figure>
-<img src="/Zorvane/media/next.png" alt="The NEXT pitch: a soccer field with tennis balls in the penalty boxes and orange and blue buckets, some on stands." width="960" height="540">
-<figcaption>Rover 0 starts on the south goal line, facing north.</figcaption>
+<img src="/Zorvane/media/field3.jpg" alt="The NEXT field from above the west touchline: the fenced pitch, light towers, scoreboard, Base tents, and the buckets on each half." width="1600" height="1220">
+<figcaption>Field 3 from above the west touchline. Rover 0 starts on the south goal line, facing north.</figcaption>
 </figure>
 
 | Rule | In the simulator |

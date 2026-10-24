@@ -7,7 +7,7 @@ and ten blue buckets, some on 1 m stands. CrabTrapBot collects balls and dumps
 them into its alliance's ground-level buckets, scored by rules 4. A narrated
 cutscene explains the rules. Launching, tags and penalties are not modeled.
 
-![NEXT pitch](../docs/public/media/next.png)
+![NEXT on Field 3](../docs/public/media/field3.jpg)
 
 ## The field, from the rules
 

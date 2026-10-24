@@ -1,53 +1,146 @@
 ---
-import DocPage from "../layouts/DocPage.astro";
+import { Code } from "astro:components";
+import codeTheme from "../styles/shiki-pitch.json";
+import ProjectPage from "../layouts/ProjectPage.astro";
 import { href, pages } from "../consts";
+
+const releases = "https://github.com/Super-Yojan/Zorvane/releases";
+const connect = `import json, zenoh
+
+config = zenoh.Config()
+config.insert_json5("mode", '"client"')
+config.insert_json5("connect/endpoints", '["tcp/127.0.0.1:7447"]')
+session = zenoh.open(config)
+
+session.declare_subscriber(
+    "terra/rover/0/next/status",
+    lambda sample: print(json.loads(sample.payload.to_bytes())),
+)
+input("Printing rover 0's NEXT status. Press Enter to stop.\n")`;
 ---
 
-<DocPage
+<ProjectPage
     title="Zorvane"
     description="The NEXT competition simulator. Build a dashboard against it, then point the same dashboard at a real rover."
-    kicker="Simulator"
-    backHref="https://super-yojan.dev/docs"
-    backLabel="All docs"
+    lede="The NEXT 2026 field, simulated. Build your dashboard here, then point it at a real rover."
+    figureLabel="Fig. 01 — Field 3, West Campus"
+    figureAlt="The NEXT field in Zorvane: a soccer pitch inside a chain-link fence, with light towers, the scoreboard, the Base tents, tennis balls and buckets."
+    poster={href("/media/field3.jpg")}
+    posterWidth={1600}
+    posterHeight={1220}
+    figureNote="Field 3, West Campus"
+    primary={{ href: "#quick-start", label: "Get Started" }}
+    secondary={{ href: releases, label: "Download" }}
+    aboutTitle="NEXT on Field 3, at its real coordinates."
+    sectionId="quick-start"
+    sectionTitle="Quick start."
+    sectionLede="Download the simulator, connect over Zenoh, and drive. The guides below cover each step in full."
+    links={pages.map((page) => ({ href: href(page.path), label: page.label }))}
 >
-    <p>
-        Zorvane runs the NEXT 2026 field on Field 3, West Campus, at its real
-        latitude and longitude. CrabTrapBot collects tennis balls, carries them
-        back to its goal, and dumps them into its alliance's buckets. The rover
-        speaks the same Zenoh topics and WebRTC video as a real Terra rover, so
-        nothing in your dashboard is simulator-only.
-    </p>
-
-    <figure>
-        <img
-            src={href("/media/next.png")}
-            alt="The NEXT pitch in Zorvane: a soccer field with tennis balls in the penalty boxes and orange and blue buckets."
-            width="960"
-            height="540"
-        />
-        <figcaption>Field 3. Orange buckets are Red's targets, blue are Blue's.</figcaption>
-    </figure>
-
-    {
-        pages.map((page, index) => (
-            <section class="guide">
-                <p class="t-label">{String(index + 1).padStart(2, "0")}</p>
-                <h2>
-                    <a class="link-wipe" href={href(page.path)}>{page.label}</a>
-                </h2>
-                <p>{page.blurb}</p>
-            </section>
-        ))
-    }
-</DocPage>
-
-<style>
-    .guide {
-        margin-top: 48px;
-        padding-top: 32px;
-        border-top: 1px solid var(--rule);
-    }
-    .guide :global(h2) {
-        margin-top: 12px;
-    }
-</style>
+    <Fragment slot="prose">
+        <p>
+            Zorvane runs the NEXT Competition 2026 field on Field 3, West
+            Campus, George Mason University. The pitch sits at its real
+            latitude and longitude, so simulated GPS and outdoor navigation
+            behave the way they will on the day.
+        </p>
+        <p>
+            CrabTrapBot collects tennis balls, carries them back to its goal
+            line, loads them into its dumper and dumps them into its alliance's
+            buckets. Red scores in orange, Blue in blue. A narrated cutscene
+            walks through the rules when the simulator starts.
+        </p>
+        <p>
+            Every rover speaks the same Zenoh topics and WebRTC video as a real
+            Terra rover, through Terra's own autonomy and signaling crates. A
+            dashboard built against the simulator drives the real rover by
+            changing one endpoint.
+        </p>
+    </Fragment>
+    <Fragment slot="facts">
+        <div>
+            <dt class="t-label">Field</dt>
+            <dd>Field 3, West Campus, 100 × 64 m</dd>
+        </div>
+        <div>
+            <dt class="t-label">Centre spot</dt>
+            <dd><code>38.833117, -77.323161</code></dd>
+        </div>
+        <div>
+            <dt class="t-label">Rover</dt>
+            <dd>CrabTrapBot, 0–32 per match</dd>
+        </div>
+        <div>
+            <dt class="t-label">Listen</dt>
+            <dd><code>tcp/127.0.0.1:7447</code></dd>
+        </div>
+        <div>
+            <dt class="t-label">Prefix</dt>
+            <dd><code>terra/rover</code></dd>
+        </div>
+        <div>
+            <dt class="t-label">Video</dt>
+            <dd>WebRTC H.264, 640 × 480 at 15 fps</dd>
+        </div>
+    </Fragment>
+    <Fragment slot="steps">
+        <li>
+            <p class="t-label">01</p>
+            <div class="prose">
+                <h3>Download and start</h3>
+                <p>
+                    Get the zip for macOS, Windows or Linux from the
+                    <a href={releases}>releases page</a>, unzip it and run
+                    <code>zorvane</code>. Choose how many rovers and press
+                    <strong>Start</strong>; Enter skips the cutscene.
+                </p>
+                <p>
+                    <a href={href("/running")}>Download and run</a> has every
+                    setting, and the build from source.
+                </p>
+            </div>
+        </li>
+        <li>
+            <p class="t-label">02</p>
+            <div class="prose">
+                <h3>Connect a dashboard</h3>
+                <p>
+                    Any Zenoh client works. In Python, this prints rover 0's
+                    NEXT status five times a second:
+                </p>
+                <Code code="python3 -m pip install 'eclipse-zenoh>=1.10.1,<1.11'" lang="bash" theme={codeTheme} wrap={false} />
+                <Code code={connect} lang="python" theme={codeTheme} wrap={false} />
+            </div>
+        </li>
+        <li>
+            <p class="t-label">03</p>
+            <div class="prose">
+                <h3>Drive and score</h3>
+                <p>
+                    Drive with <code>teleop</code>, bound to the run and
+                    revision in <code>autonomy/status</code>. Collect balls,
+                    return to your goal line, then publish
+                    <code>next/load</code> and, parked against your bucket,
+                    <code>next/dump</code>.
+                </p>
+                <p>
+                    <a href={href("/dashboard")}>Build a dashboard</a> walks
+                    through it; <a href={href("/next")}>The game</a> has the
+                    rules.
+                </p>
+            </div>
+        </li>
+        <li>
+            <p class="t-label">04</p>
+            <div class="prose">
+                <h3>Watch the rover</h3>
+                <p>
+                    Publish <code>webrtc/request</code> and answer the rover's
+                    offer to get its front camera as H.264 video, exactly as
+                    ARGOS does on a real rover. <a href={href("/fpv")}>FPV
+                    video</a> has a working Python receiver.
+                </p>
+            </div>
+        </li>
+    </Fragment>
+</ProjectPage>

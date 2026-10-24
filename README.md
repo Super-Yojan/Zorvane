@@ -11,7 +11,7 @@ longitude, with CrabTrapBot as the rover. It speaks the same Zenoh topics and
 WebRTC video as a real Terra rover, so a dashboard built against Zorvane works
 against the fleet. Terra is the vehicle body. ARGOS is the fleet operator.
 
-![NEXT pitch](docs/public/media/next.png)
+![NEXT on Field 3](docs/public/media/field3.jpg)
 
 *The rules, the field and the controls: [simulator/NEXT.md](simulator/NEXT.md).*
 
