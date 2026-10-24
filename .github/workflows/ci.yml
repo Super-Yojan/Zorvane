@@ -20,6 +20,9 @@ jobs:
         with:
           lfs: true
 
+      - name: Shared Terra source
+        run: bash .github/scripts/checkout-terra.sh
+
       - name: Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -78,6 +81,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Shared Terra source
+        run: bash .github/scripts/checkout-terra.sh
 
       - name: Rust
         uses: dtolnay/rust-toolchain@stable

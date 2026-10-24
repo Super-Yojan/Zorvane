@@ -48,14 +48,7 @@ impl Plugin for TerraWorldPlugin {
                     Some(patch)
                 }
                 Err(error) => {
-                    eprintln!("Terra tiles: {error}. Continuing with the flat practice world.");
-                    config.tiles.enabled = false;
-                    config.scene = SceneKind::Town;
-                    config.landscape = self.config.landscape.clone();
-                    if config.validate().is_err() {
-                        config.landscape.enabled = false;
-                    }
-                    None
+                    panic!("Outdoor terrain could not load: {error}. No substitute world was started.");
                 }
             }
         } else {
@@ -139,20 +132,14 @@ impl WorldConfig {
                 .map_err(|_| "TERRA_WORLD_SIZE must be a number of metres".to_owned())?;
         }
         config.tiles = crate::geo::GeoTileConfig::from_env()?;
-        if crate::next_competition::enabled() {
-            config.prepare_next_field();
-            #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-            {
-                if crate::gmu::requested() {
-                    config.prepare_gmu_field();
-                }
-            }
-        } else if std::env::var("TERRA_MISSION").as_deref() == Ok("1") {
-            config.tiles.enabled = false;
-            config.landscape.enabled = false;
-            config.size = 100.;
-            config.scene = SceneKind::Mission;
-        } else if config.tiles.enabled {
+        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
+        let next = crate::next_competition::enabled() || crate::gmu::requested();
+        #[cfg(not(all(feature = "gmu-viewer", not(target_arch = "wasm32"))))]
+        let next = false;
+        if next {
+            config.prepare_gmu_field();
+        } else {
+            config.tiles.enabled = true;
             config.scene = SceneKind::Tiles;
             config.prepare_elevation_view();
         }
@@ -353,7 +340,7 @@ fn apply_session(world: &mut World) {
         return;
     };
     let mut config = WorldConfig::for_choice(session.world);
-    let mut note = String::new();
+    let note = String::new();
     if config.tiles.enabled {
         match crate::geo::load_patch(&config.tiles, config.size) {
             Ok(patch) => {
@@ -369,17 +356,24 @@ fn apply_session(world: &mut World) {
                 world.insert_resource(patch);
             }
             Err(error) => {
-                note = format!("Tiles did not load ({error}). Showing the practice town.");
-                eprintln!("Terra tiles: {error}. Continuing with the flat practice world.");
-                config = WorldConfig::for_choice(crate::session::WorldChoice::Town);
+                if let Some(mut session) = world.get_resource_mut::<SimSession>() {
+                    session.note = format!("Outdoor terrain could not load: {error}. Please retry.");
+                    session.phase = crate::session::Phase::Menu;
+                    session.ui_epoch += 1;
+                }
+                return;
             }
         }
     } else {
         world.remove_resource::<crate::geo::GeoPatch>();
     }
-    if config.validate().is_err() {
-        note = "That world configuration was rejected. Showing the practice town.".into();
-        config = WorldConfig::for_choice(crate::session::WorldChoice::Town);
+    if let Err(error) = config.validate() {
+        if let Some(mut session) = world.get_resource_mut::<SimSession>() {
+            session.note = format!("Outdoor configuration rejected: {error}");
+            session.phase = crate::session::Phase::Menu;
+            session.ui_epoch += 1;
+        }
+        return;
     }
     world.insert_resource(config.clone());
     if let Some(mut fleet) = world.get_resource_mut::<crate::terra::RoverFleet>() {

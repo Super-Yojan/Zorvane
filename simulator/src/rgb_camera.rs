@@ -29,6 +29,7 @@ pub struct RgbFrame {
     pub rgba: Vec<u8>,
     pub sequence: u64,
     pub received_at: f64,
+    pub(crate) last_observation: f64,
 }
 fn mount_rgb_cameras(
     mut commands: Commands,
@@ -101,8 +102,12 @@ fn strip_padding(data: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
             .collect(),
     )
 }
-fn receive_rgb(event: On<ReadbackComplete>, time: Res<Time>, mut frames: Query<&mut RgbFrame>) {
-    let Ok(mut frame) = frames.get_mut(event.entity) else {
+fn receive_rgb(
+    event: On<ReadbackComplete>,
+    time: Res<Time>,
+    mut frames: Query<(&mut RgbFrame, &crate::terra::RoverId)>,
+) {
+    let Ok((mut frame, id)) = frames.get_mut(event.entity) else {
         return;
     };
     let Some(rgba) = strip_padding(&event.data, frame.width, frame.height) else {
@@ -111,6 +116,10 @@ fn receive_rgb(event: On<ReadbackComplete>, time: Res<Time>, mut frames: Query<&
     frame.rgba = rgba;
     frame.sequence += 1;
     frame.received_at = time.elapsed_secs_f64();
+    if frame.received_at - frame.last_observation >= crate::observation_capture::evidence_period() {
+        crate::observation_capture::capture_rgb(id.0, &frame);
+        frame.last_observation = frame.received_at;
+    }
 }
 #[cfg(test)]
 mod tests {

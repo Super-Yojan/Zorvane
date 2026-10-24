@@ -232,6 +232,9 @@ impl BrowserTransport {
                         Control::Ready { version: VERSION } => {
                             self.last_received = Instant::now();
                             self.shared.epoch.fetch_add(1, Ordering::Relaxed);
+                            self.shared
+                                .connection_generation
+                                .fetch_add(1, Ordering::Release);
                             self.shared.connected.store(true, Ordering::Release);
                             status(
                                 "Connected to the Zorvane client. Select a world and press Start.",

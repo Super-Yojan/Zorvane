@@ -23,6 +23,19 @@ A start screen picks the practice town, the elevation tiles, or the NEXT pitch, 
 
 The normal build includes Terra's A* waypoint routing. With Zenoh enabled, select `waypoint` autonomy and send a goal through the rover topics. The rover plans around obstacles in its depth-derived occupancy map. Unknown or unreachable routes hold motion until a safe route becomes available. Route points are published as `global_route` in `autonomy/status` when a route is available.
 
+## Local ARGOS GPUI dashboard
+
+With sibling `Terra` and `ARGOS` checkouts, run `scripts/run-argos-local.sh` here,
+then `scripts/run-zorvane.sh` from ARGOS in a second terminal. The simulator
+builds against the adjacent Terra checkout and starts one rover in the real-elevation
+world (GMU by default), skipping the practice town. Set `TERRA_LAT` and `TERRA_LON`
+to choose another elevation anchor. Google scenery additionally needs
+`GOOGLE_MAPS_API_KEY`; it is visual-only and does not supply collision geometry. Both launchers
+use `tcp/127.0.0.1:7447` and `terra/rover` without authentication. The simulator
+launcher clears hosted connection overrides; the dashboard launcher overrides
+its hosted `.env` settings only for this process. Ordinary ARGOS launches still
+use the saved hosted fleet settings. Neither launcher arms or drives a rover.
+
 ## Headless
 
 ```sh

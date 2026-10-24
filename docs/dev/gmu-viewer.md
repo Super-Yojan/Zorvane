@@ -36,7 +36,11 @@ cargo run -p zorvane --example gmu_viewer --features gmu-viewer
 unset GOOGLE_MAPS_API_KEY
 ```
 
-The viewer reads the environment; it does not load `.env` files or store keys.
+The simulator and standalone viewer automatically resolve the Maps key from the
+environment, the working directory `.env`, the Zorvane root `.env`, then the
+adjacent ARGOS checkout `.env`, in that order. Only `GOOGLE_MAPS_API_KEY` is
+read; fleet credentials are never imported. An explicitly empty key disables
+fallback. Saved `.env` files are gitignored; no key is copied or logged.
 Do not paste credentials into source code, screenshots, issues, or chat.
 The standard native simulator build includes this feature for its GMU menu preset.
 Scenery requests start only when GMU is selected and started. Non-native builds

@@ -198,7 +198,30 @@ fn host_records_browser_events_and_acknowledges_health() {
             serde_json::to_string(&Control::Heartbeat).unwrap(),
         ))
         .unwrap();
-    std::thread::sleep(Duration::from_millis(30));
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let recorded = std::fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|file| {
+                std::fs::read_to_string(file.path())
+                    .unwrap_or_default()
+                    .lines()
+                    .any(|line| {
+                        serde_json::from_str::<serde_json::Value>(line)
+                            .ok()
+                            .is_some_and(|v| v["sequence"] == 7)
+                    })
+            });
+        if recorded {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "browser record was not persisted"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
     drop(client);
     let files: Vec<_> = std::fs::read_dir(&directory)
         .unwrap()

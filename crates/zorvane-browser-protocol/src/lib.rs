@@ -206,6 +206,27 @@ impl Outbox {
     }
 }
 
+/// Simulated counterpart of the phone's streamed motor-relay observation.
+/// Readiness describes the virtual actuator connection; autonomy holds remain
+/// on autonomy/status. Neutral output is ready to accept a new command stream.
+pub fn simulated_relay_status(
+    run_id: &str,
+    connected: bool,
+    output_active: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "run_id": run_id,
+        "control_mode": "streamed_relay",
+        "connected": connected,
+        "ready": connected,
+        "output_active": connected && output_active,
+        "fault": null,
+        "simulated": true,
+        "reason": if connected { "Simulated actuation ready" } else { "Simulator transport disconnected" },
+    })
+}
+
 // Same emergency-stop ordering as Terra, generic over the platform clock.
 pub type ControlAction<T> = (String, Vec<u8>, T);
 fn stop_token<T>(a: &ControlAction<T>) -> Option<String> {
@@ -238,6 +259,24 @@ pub fn enqueue_control_action<T>(
     payload: Vec<u8>,
     received: T,
 ) {
+    if !matches!(
+        kind.as_str(),
+        "autonomy"
+            | "goal"
+            | "navigation/settings"
+            | "navigation/source"
+            | "navigation/resume"
+            | "hardware"
+            | "teleop"
+            | "safety"
+            | "goal/decision"
+            | "mission/report"
+            | "search"
+            | "search/action"
+            | "search/report/ack"
+    ) {
+        return;
+    }
     let action = (kind, payload, received);
     if let Some(token) = stop_token(&action) {
         q.retain(|a| stop_token(a).as_deref() != Some(&token));
