@@ -1,0 +1,71 @@
+{
+  "title": "NEXT Competition 2026 - Field 3, West Campus",
+  "note": "Narration follows the NEXT Competition 2026 Rules (August 7, 2026): sections 1, 2.2, 2.3, 3.1, 3.2, 4, 4.3, 4.4 and 5.6. Edit it here, then run simulator/tools/cutscene/make_voiceover.py to regenerate the audio and timings. Captions are ASCII: the built-in UI font has no other glyphs.",
+  "voice": "Samantha",
+  "rate": 172,
+  "beats": [
+    {
+      "shot": "aerial",
+      "caption": "NEXT Competition 2026",
+      "narration": "This is the NEXT Competition, on Field 3 at George Mason University's West Campus.",
+      "audio": "audio/next_intro_1.ogg",
+      "seconds": 5.83
+    },
+    {
+      "shot": "sweep",
+      "caption": "Red Alliance vs Blue Alliance: one 90-minute match",
+      "narration": "Two alliances, Red and Blue, play one ninety-minute match on a regulation soccer field, and swap sides at halftime.",
+      "audio": "audio/next_intro_2.ogg",
+      "seconds": 7.73
+    },
+    {
+      "shot": "red_base",
+      "caption": "Your Base: the only place to touch a vehicle",
+      "narration": "Each alliance commands from its Base tent. The Base is the only place a person may touch a vehicle.",
+      "audio": "audio/next_intro_3.ogg",
+      "seconds": 6.04
+    },
+    {
+      "shot": "balls",
+      "caption": "99 tennis balls in each penalty box",
+      "narration": "Ninety-nine tennis balls start in each penalty box. Collect them, and launch them into your buckets.",
+      "audio": "audio/next_intro_4.ogg",
+      "seconds": 6.3
+    },
+    {
+      "shot": "orange_bucket",
+      "caption": "Red scores in orange, Blue scores in blue",
+      "narration": "Red scores in the orange buckets on Blue's half of the field. Blue scores in the blue buckets on Red's half.",
+      "audio": "audio/next_intro_5.ogg",
+      "seconds": 6.21
+    },
+    {
+      "shot": "elevated_bucket",
+      "caption": "Ground: 1 or 2 points. Elevated: 3 or 6 points",
+      "narration": "A ground bucket near midfield is worth one point, and two deep in enemy territory. Raised to one meter, they are worth three and six.",
+      "audio": "audio/next_intro_6.ogg",
+      "seconds": 8.08
+    },
+    {
+      "shot": "tag",
+      "caption": "Tagged: frozen for 15 minutes",
+      "narration": "Hit an opposing vehicle with a launched ball to tag it. A tagged vehicle is frozen for fifteen minutes.",
+      "audio": "audio/next_intro_7.ogg",
+      "seconds": 6.09
+    },
+    {
+      "shot": "penalty",
+      "caption": "-7 points: ball out of bounds or bucket knocked over",
+      "narration": "Every ball shot out of bounds, and every bucket knocked over, costs seven points.",
+      "audio": "audio/next_intro_8.ogg",
+      "seconds": 5.55
+    },
+    {
+      "shot": "rover",
+      "caption": "W A S D to drive, Space to stop",
+      "narration": "You drive CrabTrapBot for the Red Alliance. Use W, A, S and D to drive, and Space to stop. Good luck.",
+      "audio": "audio/next_intro_9.ogg",
+      "seconds": 7.95
+    }
+  ]
+}

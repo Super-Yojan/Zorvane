@@ -33,63 +33,18 @@ fn spectator_layers() -> RenderLayers {
     RenderLayers::from_layers(&[0, GOOGLE_LAYER])
 }
 
-/// Independent nominal placement; no Google mesh sampling, tracing or colliders.
-/// Center/heading: OpenStreetMap way 233194670 (ODbL, © OSM contributors).
-/// Height: USGS 127.60157 m + NOAA GEOID18 -31.86 m, approximately 95.74 m.
-#[derive(Resource, Clone, Copy)]
-struct Placement {
-    latitude: f64,
-    longitude: f64,
-    elevation: f64,
-    heading: f64,
-}
-impl Default for Placement {
-    fn default() -> Self {
-        Self {
-            latitude: 38.833755825,
-            longitude: -77.31659325,
-            elevation: 95.74,
-            heading: 4.81259,
-        }
-    }
-}
-impl Placement {
-    fn from_env() -> Result<Self, String> {
-        let mut p = Self::default();
-        for (name, target) in [
-            ("TERRA_GMU_LAT", &mut p.latitude),
-            ("TERRA_GMU_LON", &mut p.longitude),
-            ("TERRA_GMU_ELEVATION", &mut p.elevation),
-            ("TERRA_GMU_HEADING", &mut p.heading),
-        ] {
-            if let Ok(value) = std::env::var(name) {
-                *target = value
-                    .parse()
-                    .map_err(|_| format!("{name} must be a finite number"))?;
-            }
-        }
-        p.validate()?;
-        Ok(p)
-    }
-    fn validate(&self) -> Result<(), String> {
-        if !self.latitude.is_finite()
-            || !(-85.0..=85.0).contains(&self.latitude)
-            || !self.longitude.is_finite()
-            || !(-180.0..=180.0).contains(&self.longitude)
-            || !self.elevation.is_finite()
-            || !(-500.0..=9000.0).contains(&self.elevation)
-            || !self.heading.is_finite()
-            || !(0.0..360.0).contains(&self.heading)
-        {
-            return Err("GMU placement requires latitude [-85,85], longitude [-180,180], ellipsoid elevation [-500,9000] m and heading [0,360) degrees".into());
-        }
-        Ok(())
-    }
-    fn world_from_ecef(self) -> DMat4 {
-        // Heading is clockwise from north for the pitch's -Z direction.
-        DMat4::from_quat(DQuat::from_rotation_y(self.heading.to_radians()))
-            * bevy_3d_tiles::geodesy::world_from_ecef(self.latitude, self.longitude, self.elevation)
-    }
+// Independent nominal placement; no Google mesh sampling, tracing or colliders.
+// The pitch's placement is shared with the simulated GPS in `mason_field`.
+use crate::mason_field::Placement;
+
+/// Scenery frame: heading is clockwise from north for the pitch's -Z direction.
+fn world_from_ecef(placement: Placement) -> DMat4 {
+    DMat4::from_quat(DQuat::from_rotation_y(placement.heading.to_radians()))
+        * bevy_3d_tiles::geodesy::world_from_ecef(
+            placement.latitude,
+            placement.longitude,
+            placement.elevation,
+        )
 }
 
 fn placement_for_world(
@@ -348,7 +303,7 @@ fn sync_scene(
                 .entity(camera)
                 .insert((spectator_layers(), Tiles3dCamera));
             commands.insert_resource(EcefOrigin {
-                world_from_ecef: frame.map(Placement::world_from_ecef),
+                world_from_ecef: frame.map(world_from_ecef),
             });
             spawn_status(&mut commands, &font);
         }
@@ -507,7 +462,7 @@ mod tests {
             placement.longitude,
             placement.elevation,
         );
-        let matrix = placement.world_from_ecef();
+        let matrix = world_from_ecef(placement);
         assert!(
             matrix
                 .transform_point3(bevy::math::DVec3::new(x, y, z))
@@ -564,7 +519,7 @@ mod tests {
                 .query::<&crate::next_competition::TennisBall>()
                 .iter(world)
                 .count(),
-            6
+            crate::next_competition::ball_positions().len()
         );
         assert_eq!(
             world
@@ -696,8 +651,7 @@ mod tests {
         assert!((placement.elevation - 100.64).abs() < 1e-5);
         let (x, y, z) = bevy_3d_tiles::geodesy::geodetic_to_ecef(38.8297, -77.3075, 100.64);
         assert!(
-            placement
-                .world_from_ecef()
+            world_from_ecef(placement)
                 .transform_point3(bevy::math::DVec3::new(x, y, z))
                 .length()
                 < 1e-6
@@ -735,8 +689,3 @@ mod tests {
     }
 }
 
-/// Geographic reference shared by rendered NEXT placement and simulated sensors.
-pub(crate) fn geographic_reference() -> Option<crate::outdoor::GeoReference> {
-    let p = Placement::from_env().ok()?;
-    Some(crate::outdoor::GeoReference { latitude: p.latitude, longitude: p.longitude, heading: p.heading })
-}

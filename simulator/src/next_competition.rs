@@ -9,11 +9,11 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-/// FIFA Laws of the Game, Law 1, recommended size for international matches.
-/// User decision: use this size for the NEXT pitch.
-pub const PITCH_LENGTH: f32 = 105.0;
-/// FIFA Laws of the Game, Law 1, recommended width for international matches.
-pub const PITCH_WIDTH: f32 = 68.0;
+/// NEXT Competition 2026 Rules 2.1: a regulation soccer field, approximately
+/// 110 × 70 yards (100 m × 64 m).
+pub const PITCH_LENGTH: f32 = 100.0;
+/// NEXT 2026 Rules 2.1.
+pub const PITCH_WIDTH: f32 = 64.0;
 /// Centre circle radius, metres (10 yards).
 pub const CENTER_CIRCLE_RADIUS: f32 = 9.15;
 /// Penalty area depth from the goal line, metres (18 yards).
@@ -24,8 +24,9 @@ pub const PENALTY_AREA_WIDTH: f32 = 40.32;
 pub const GOAL_AREA_DEPTH: f32 = 5.5;
 /// Goal area width, metres (20 yards: 5.5 + 7.32 + 5.5).
 pub const GOAL_AREA_WIDTH: f32 = 18.32;
-/// Square ground that contains the pitch, boards, and an apron.
-pub const WORLD_SIZE: f32 = 120.0;
+/// Square ground that contains Field 3's turf (about 74 × 123 m), the alliance
+/// Bases and the perimeter fence.
+pub const WORLD_SIZE: f32 = 140.0;
 /// Pitch half-width along Bevy X, metres.
 pub const PITCH_HALF_WIDTH: f32 = PITCH_WIDTH * 0.5;
 /// South goal line. The pitch is centred on the origin.
@@ -55,7 +56,15 @@ pub const BUCKET_BASE_DIAMETER: f32 = 0.3023;
 pub const BUCKET_BODY_HEIGHT: f32 = 0.3399;
 /// Shell thickness so the open top has an interior. Not on the product diagram.
 const BUCKET_WALL: f32 = 0.0025;
+/// NEXT 2026 Rules 3.2: 10 orange and 10 blue buckets, one colour per half.
 pub const BUCKETS_PER_HALF: usize = 10;
+/// Rules 3.2a: a bucket stands at ground level or is elevated to 1 m.
+pub const BUCKET_STAND_HEIGHT: f32 = 1.0;
+/// How many of each half's buckets stand on a 1 m stand. The rules allow
+/// either height but do not fix the mix; sim choice.
+pub const ELEVATED_PER_HALF: usize = 4;
+/// Rules 3.1: 99 tennis balls in each penalty box at the start.
+pub const BALLS_PER_PENALTY_BOX: usize = 99;
 /// How far inside each goal line a bucket centre must stay. Sim choice.
 pub const SPAWN_CLEARANCE: f32 = 1.6;
 pub const DEFAULT_BUCKET_SEED: u64 = 42;
@@ -65,10 +74,14 @@ pub fn enabled() -> bool {
     if crate::gmu::requested() {
         return true;
     }
-    matches!(
-        std::env::var("TERRA_NEXT").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE")
-    )
+    // The NEXT competition is the default world. An explicit TERRA_NEXT
+    // decides; otherwise asking for the elevation map (TERRA_TILES=1) opts out.
+    let flag = |name| match std::env::var(name).as_deref() {
+        Ok("1") | Ok("true") | Ok("TRUE") => Some(true),
+        Ok("0") | Ok("false") | Ok("FALSE") => Some(false),
+        _ => None,
+    };
+    flag("TERRA_NEXT").unwrap_or(flag("TERRA_TILES") != Some(true))
 }
 
 pub fn install(app: &mut App) {
@@ -79,7 +92,10 @@ pub fn install(app: &mut App) {
     app.add_systems(Update, (name_zatara, setup_crab_traps))
         .add_systems(FixedUpdate, (settle_deposits, collect_crab_trap_balls));
     if enabled() && !menu {
-        app.add_systems(Startup, spawn_field);
+        app.add_systems(
+            Startup,
+            (spawn_field, crate::mason_field::spawn_surroundings),
+        );
     }
 }
 
@@ -93,27 +109,38 @@ pub struct Wall {
     pub size: Vec3,
 }
 
-/// One open-top bucket on the pitch.
+/// One open-top bucket on the pitch, at ground level or on a 1 m stand.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BucketPlace {
     pub x: f32,
     pub z: f32,
+    pub elevated: bool,
 }
 
 impl BucketPlace {
     pub fn open(x: f32, z: f32) -> Self {
-        Self { x, z }
+        Self {
+            x,
+            z,
+            elevated: false,
+        }
+    }
+
+    /// Height of the bucket's base above the turf.
+    pub fn base_y(self) -> f32 {
+        if self.elevated { BUCKET_STAND_HEIGHT } else { 0.0 }
     }
 
     pub fn volume(self) -> Bucket {
         let inner = BUCKET_TOP_DIAMETER * 0.5 - BUCKET_WALL;
+        let base = self.base_y();
         Bucket {
             center_x: self.x,
             center_z: self.z,
             inner_radius: inner,
-            floor_y: BUCKET_WALL,
-            rim_y: BUCKET_BODY_HEIGHT,
-            rest: Vec3::new(self.x, BUCKET_WALL + TENNIS_BALL_RADIUS, self.z),
+            floor_y: base + BUCKET_WALL,
+            rim_y: base + BUCKET_BODY_HEIGHT,
+            rest: Vec3::new(self.x, base + BUCKET_WALL + TENNIS_BALL_RADIUS, self.z),
         }
     }
 }
@@ -191,9 +218,17 @@ fn place_half(rng: &mut fastrand::Rng, south: bool) -> Vec<BucketPlace> {
         "bucket layout could not place {BUCKETS_PER_HALF} buckets"
     );
     points.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    // Elevate a seeded subset, so stands appear at every depth.
+    let mut order: Vec<usize> = (0..points.len()).collect();
+    rng.shuffle(&mut order);
+    let raised = &order[..ELEVATED_PER_HALF.min(order.len())];
     points
         .into_iter()
-        .map(|point| BucketPlace::open(point.x, point.y))
+        .enumerate()
+        .map(|(index, point)| BucketPlace {
+            elevated: raised.contains(&index),
+            ..BucketPlace::open(point.x, point.y)
+        })
         .collect()
 }
 
@@ -242,16 +277,62 @@ fn goal_line_xs(count: usize, spacing: f32, chassis_x: f32) -> Vec<f32> {
     xs
 }
 
-pub fn ball_positions() -> [Vec3; 6] {
-    let y = TENNIS_BALL_RADIUS;
-    [
-        Vec3::new(-2.4, y, -3.2),
-        Vec3::new(-0.7, y, -4.5),
-        Vec3::new(1.0, y, -3.4),
-        Vec3::new(2.6, y, -4.9),
-        Vec3::new(-1.7, y, -5.7),
-        Vec3::new(0.8, y, -6.3),
-    ]
+/// `TERRA_NEXT_BALLS` adds this many tennis balls scattered over the pitch,
+/// as on a NEXT2026 practice field, on top of the six competition balls.
+/// More balls give object detection more examples per frame.
+pub fn extra_ball_count() -> usize {
+    std::env::var("TERRA_NEXT_BALLS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+        .min(400)
+}
+
+/// Deterministic scatter: on the pitch, clear of buckets and the goal mouths.
+pub fn scattered_balls(count: usize, buckets: &[BucketPlace]) -> Vec<Vec3> {
+    let mut rng = fastrand::Rng::with_seed(0x6e65_7874);
+    let mut balls = Vec::with_capacity(count);
+    for _ in 0..count * 50 {
+        if balls.len() == count {
+            break;
+        }
+        let x = (rng.f32() * 2.0 - 1.0) * (PITCH_HALF_WIDTH - 0.5);
+        let z = PITCH_NORTH + 0.5 + rng.f32() * (PITCH_SOUTH - PITCH_NORTH - 1.0);
+        let clear = buckets
+            .iter()
+            .all(|bucket| Vec2::new(bucket.x - x, bucket.z - z).length() > 0.6)
+            && (x.abs() > GOAL_WIDTH || z.abs() < PITCH_SOUTH - 2.0);
+        if clear {
+            balls.push(Vec3::new(x, TENNIS_BALL_RADIUS, z));
+        }
+    }
+    balls
+}
+
+/// Rules 3.1: 99 balls in each penalty box. They are spread evenly with a
+/// seeded jitter and kept out of the goal area, where rovers start.
+pub fn ball_positions() -> Vec<Vec3> {
+    let mut rng = fastrand::Rng::with_seed(0x6e65_7874_3331);
+    let mut balls = Vec::with_capacity(BALLS_PER_PENALTY_BOX * 2);
+    for goal_z in [PITCH_SOUTH, PITCH_NORTH] {
+        let inward = -goal_z.signum();
+        let mut side = Vec::with_capacity(BALLS_PER_PENALTY_BOX);
+        for _ in 0..BALLS_PER_PENALTY_BOX * 400 {
+            if side.len() == BALLS_PER_PENALTY_BOX {
+                break;
+            }
+            let x = (rng.f32() * 2.0 - 1.0) * (PENALTY_AREA_WIDTH * 0.5 - 0.3);
+            let depth = 0.3 + rng.f32() * (PENALTY_AREA_DEPTH - 0.6);
+            let in_goal_area = x.abs() < GOAL_AREA_WIDTH * 0.5 + 0.5 && depth < GOAL_AREA_DEPTH + 0.5;
+            let point = Vec3::new(x, TENNIS_BALL_RADIUS, goal_z + inward * depth);
+            if !in_goal_area && side.iter().all(|other: &Vec3| other.distance(point) > 0.9) {
+                side.push(point);
+            }
+        }
+        assert_eq!(side.len(), BALLS_PER_PENALTY_BOX, "penalty box ball layout");
+        balls.extend(side);
+    }
+    balls
 }
 
 pub fn pitch_boards() -> Vec<Wall> {
@@ -316,18 +397,66 @@ pub(crate) fn spawn_field(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    assets: Option<Res<AssetServer>>,
     config: Option<Res<crate::world::WorldConfig>>,
 ) {
     if config.is_some_and(|config| config.scene != crate::world::SceneKind::Next) {
         return;
     }
-    spawn_field_contents(&mut commands, &mut meshes, &mut materials);
+    spawn_field_contents(&mut commands, &mut meshes, &mut materials, assets.as_deref());
+}
+
+/// Optic yellow felt and Home Depot orange (#F96302), used when the
+/// textures and the Blender bucket are not available (headless tests).
+const BALL_FELT: Color = Color::srgb(0.875, 1.0, 0.31);
+const BUCKET_ORANGE: Color = Color::srgb(0.976, 0.388, 0.008);
+/// Blue buckets (#1D5DB2), matched by eye to the NEXT2026 footage.
+const BUCKET_BLUE: Color = Color::srgb(0.114, 0.365, 0.698);
+/// Turf lines in yellow, as on the multi-sport NEXT2026 field.
+const LINE_YELLOW: Color = Color::srgb(0.95, 0.78, 0.12);
+/// Mowing stripes across the pitch, as on a cut natural-grass field.
+const MOWING_STRIPES: usize = 14;
+
+/// Loads a texture that tiles: the pitch and apron repeat it every few metres.
+pub(crate) fn repeating(assets: &AssetServer, path: &'static str) -> Handle<Image> {
+    use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
+    assets
+        .load_builder()
+        .with_settings(|settings: &mut ImageLoaderSettings| {
+            settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                ..ImageSamplerDescriptor::linear()
+            });
+        })
+        .load(path)
+}
+
+fn turf_material(
+    materials: &mut Assets<StandardMaterial>,
+    turf: Option<&Handle<Image>>,
+    width: f32,
+    length: f32,
+    shade: f32,
+) -> Handle<StandardMaterial> {
+    let repeat = crate::mason_field::TURF_REPEAT;
+    materials.add(StandardMaterial {
+        base_color: match turf {
+            Some(_) => Color::srgb(shade, shade, shade),
+            None => Color::srgb(0.18 * shade, 0.52 * shade, 0.22 * shade),
+        },
+        base_color_texture: turf.cloned(),
+        uv_transform: bevy::math::Affine2::from_scale(Vec2::new(width / repeat, length / repeat)),
+        perceptual_roughness: 0.95,
+        ..default()
+    })
 }
 
 fn spawn_field_contents(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    assets: Option<&AssetServer>,
 ) {
     let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
     let material = |materials: &mut Assets<StandardMaterial>, color, roughness| {
@@ -337,13 +466,28 @@ fn spawn_field_contents(
             ..default()
         })
     };
-    let grass = material(materials, Color::srgb(0.18, 0.52, 0.22), 0.95);
+    let length = PITCH_SOUTH - PITCH_NORTH;
+    let width = PITCH_HALF_WIDTH * 2.0;
+    let turf = assets.map(|assets| repeating(assets, crate::mason_field::TURF_TEXTURE));
+    let grass = turf_material(materials, turf.as_ref(), width, length, 1.0);
     let line = material(materials, Color::srgb(0.95, 0.95, 0.92), 0.7);
     let board = material(materials, Color::srgb(0.90, 0.92, 0.94), 0.55);
-    let bucket_color = material(materials, Color::srgb(0.93, 0.94, 0.95), 0.45);
+    // Grey: the rules reserve orange, blue and yellow for game pieces.
+    let stand_color = material(materials, Color::srgb(0.54, 0.55, 0.57), 0.6);
+    let bucket_colors = [
+        material(materials, BUCKET_ORANGE, 0.42),
+        material(materials, BUCKET_BLUE, 0.42),
+    ];
     let goal_color = material(materials, Color::srgb(0.95, 0.95, 0.96), 0.4);
-    let ball_color = material(materials, Color::srgb(0.79, 0.95, 0.10), 0.35);
-    let ball_mesh = meshes.add(Sphere::new(TENNIS_BALL_RADIUS).mesh().ico(3).unwrap());
+    // Felt is matte; the texture carries the white seam.
+    let ball_color = materials.add(StandardMaterial {
+        base_color: if assets.is_some() { Color::WHITE } else { BALL_FELT },
+        base_color_texture: assets
+            .map(|assets| assets.load(crate::mason_field::TENNIS_BALL_TEXTURE)),
+        perceptual_roughness: 0.95,
+        ..default()
+    });
+    let ball_mesh = meshes.add(Sphere::new(TENNIS_BALL_RADIUS).mesh().uv(32, 18));
     assert!(
         ball_positions()
             .iter()
@@ -351,8 +495,6 @@ fn spawn_field_contents(
         "NEXT tennis balls must sit on the pitch"
     );
 
-    let length = PITCH_SOUTH - PITCH_NORTH;
-    let width = PITCH_HALF_WIDTH * 2.0;
     let mid_z = (PITCH_SOUTH + PITCH_NORTH) * 0.5;
     commands.spawn((
         Name::new("NEXT pitch"),
@@ -362,8 +504,40 @@ fn spawn_field_contents(
         MeshMaterial3d(grass),
         Transform::from_xyz(0.0, 0.003, mid_z).with_scale(Vec3::new(width, 0.004, length)),
     ));
+    // Every other band is darker, laid just above the pitch and under the lines.
+    let band = length / MOWING_STRIPES as f32;
+    // Synthetic turf rolls in panels; the banding is faint, not mown stripes.
+    let mown = turf_material(materials, turf.as_ref(), width, band, 0.93);
+    for index in (0..MOWING_STRIPES).step_by(2) {
+        commands.spawn((
+            Name::new("NEXT mowing stripe"),
+            PitchSurface,
+            NextField,
+            Mesh3d(cube.clone()),
+            MeshMaterial3d(mown.clone()),
+            Transform::from_xyz(0.0, 0.0052, PITCH_NORTH + band * (index as f32 + 0.5))
+                .with_scale(Vec3::new(width, 0.0004, band)),
+        ));
+    }
 
     paint_lines(commands, &cube, &line);
+    let yellow = material(materials, LINE_YELLOW, 0.7);
+    // Yellow restraining lines across the field, 30 yards from each end line,
+    // where the NEXT2026 field's lacrosse markings run.
+    for z in [PITCH_SOUTH - 27.43, PITCH_NORTH + 27.43] {
+        commands.spawn((
+            Name::new("NEXT yellow line"),
+            PitchSurface,
+            NextField,
+            Mesh3d(cube.clone()),
+            MeshMaterial3d(yellow.clone()),
+            Transform::from_xyz(0.0, MARKING_Y, z).with_scale(Vec3::new(
+                PITCH_WIDTH,
+                0.006,
+                LINE_WIDTH,
+            )),
+        ));
+    }
     for wall in pitch_boards() {
         commands.spawn((
             Name::new("NEXT board"),
@@ -380,9 +554,13 @@ fn spawn_field_contents(
     }
     spawn_goals(commands, meshes, &goal_color);
     let shell = meshes.add(bucket_shell_mesh());
-    for (index, place) in buckets(bucket_seed()).into_iter().enumerate() {
+    let places = buckets(bucket_seed());
+    for (index, place) in places.iter().copied().enumerate() {
         let bucket = place.volume();
-        commands.spawn((
+        if place.elevated {
+            spawn_stand(commands, &cube, &stand_color, place);
+        }
+        let mut entity = commands.spawn((
             Name::new(format!("NEXT bucket {}", index + 1)),
             NextField,
             bucket,
@@ -390,12 +568,38 @@ fn spawn_field_contents(
             bucket_collider(),
             Friction::new(0.7),
             Restitution::new(0.05),
-            Mesh3d(shell.clone()),
-            MeshMaterial3d(bucket_color.clone()),
-            Transform::from_xyz(place.x, 0.0, place.z),
+            // Buckets sit at random angles, as they would when set down.
+            Visibility::default(),
+            Transform::from_xyz(place.x, place.base_y(), place.z)
+                .with_rotation(Quat::from_rotation_y(index as f32 * 2.399_963)),
         ));
+        // Rules 3.2b: each alliance's buckets stand in the opposing half. Red
+        // (south Base) scores in the orange buckets on the north half; Blue
+        // scores in the blue buckets on the south half.
+        let blue = index < BUCKETS_PER_HALF;
+        match assets {
+            Some(assets) => {
+                let model = if blue {
+                    crate::mason_field::BLUE_BUCKET_MODEL
+                } else {
+                    crate::mason_field::BUCKET_MODEL
+                };
+                entity.with_child(WorldAssetRoot(
+                    assets.load(GltfAssetLabel::Scene(0).from_asset(model)),
+                ));
+            }
+            None => {
+                entity.insert((
+                    Mesh3d(shell.clone()),
+                    MeshMaterial3d(bucket_colors[usize::from(blue)].clone()),
+                ));
+            }
+        }
     }
-    for (index, position) in ball_positions().into_iter().enumerate() {
+    let balls = ball_positions()
+        .into_iter()
+        .chain(scattered_balls(extra_ball_count(), &places));
+    for (index, position) in balls.enumerate() {
         commands.spawn((
             Name::new(format!("Tennis ball {}", index + 1)),
             NextField,
@@ -415,9 +619,63 @@ fn spawn_field_contents(
     }
     eprintln!(
         "Terra NEXT: Zatara on a {PITCH_LENGTH} m by {PITCH_WIDTH} m pitch, {} tennis balls, {} deposit buckets. W/A/S/D drives the primary rover when Zenoh is off.",
-        ball_positions().len(),
+        ball_positions().len() + extra_ball_count(),
         buckets(bucket_seed()).len()
     );
+}
+
+/// A 1 m stand for an elevated bucket (rules 3.2a): a 0.5 m square top on
+/// four legs, static, so balls and rovers collide with it.
+fn spawn_stand(
+    commands: &mut Commands,
+    cube: &Handle<Mesh>,
+    material: &Handle<StandardMaterial>,
+    place: BucketPlace,
+) {
+    const TOP: f32 = 0.5;
+    const THICKNESS: f32 = 0.04;
+    const LEG: f32 = 0.045;
+    let leg_height = BUCKET_STAND_HEIGHT - THICKNESS;
+    let inset = TOP * 0.5 - LEG;
+    commands
+        .spawn((
+            Name::new("NEXT bucket stand"),
+            NextField,
+            RigidBody::Static,
+            Collider::compound(
+                std::iter::once((
+                    Position::from_xyz(0.0, BUCKET_STAND_HEIGHT - THICKNESS * 0.5, 0.0),
+                    Rotation::default(),
+                    Collider::cuboid(TOP, THICKNESS, TOP),
+                ))
+                .chain([(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(sx, sz)| {
+                    (
+                        Position::from_xyz(sx * inset, leg_height * 0.5, sz * inset),
+                        Rotation::default(),
+                        Collider::cuboid(LEG, leg_height, LEG),
+                    )
+                }))
+                .collect(),
+            ),
+            Visibility::default(),
+            Transform::from_xyz(place.x, 0.0, place.z),
+        ))
+        .with_children(|stand| {
+            stand.spawn((
+                Mesh3d(cube.clone()),
+                MeshMaterial3d(material.clone()),
+                Transform::from_xyz(0.0, BUCKET_STAND_HEIGHT - THICKNESS * 0.5, 0.0)
+                    .with_scale(Vec3::new(TOP, THICKNESS, TOP)),
+            ));
+            for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                stand.spawn((
+                    Mesh3d(cube.clone()),
+                    MeshMaterial3d(material.clone()),
+                    Transform::from_xyz(sx * inset, leg_height * 0.5, sz * inset)
+                        .with_scale(Vec3::new(LEG, leg_height, LEG)),
+                ));
+            }
+        });
 }
 
 fn spawn_goals(
@@ -665,6 +923,7 @@ fn setup_crab_traps(
                                 "Right intake hinge"
                             }),
                             TrapFlap { side },
+                            Visibility::default(),
                             Transform::from_xyz(side * 0.205, -0.237, -0.298),
                         ))
                         .with_children(|hinge| {
@@ -831,20 +1090,28 @@ mod tests {
     fn layout_fits_the_pitch_and_leaves_the_spawn_clear() {
         let spawn = Vec2::ZERO;
         let mut balls = ball_positions();
-        assert_eq!(balls.len(), 6);
+        assert_eq!(balls.len(), BALLS_PER_PENALTY_BOX * 2);
         for ball in &balls {
-            assert!(on_pitch(ball.x, ball.z, 0.5), "{ball:?}");
+            assert!(on_pitch(ball.x, ball.z, 0.2), "{ball:?}");
             assert!((ball.y - TENNIS_BALL_RADIUS).abs() < 1e-4);
             assert!(Vec2::new(ball.x, ball.z).distance(spawn) > 1.5);
+            // Rules 3.1: inside a penalty box, outside the goal area.
+            let depth = PITCH_SOUTH - ball.z.abs();
+            assert!(ball.x.abs() <= PENALTY_AREA_WIDTH * 0.5 && depth <= PENALTY_AREA_DEPTH, "{ball:?}");
+            assert!(ball.x.abs() > GOAL_AREA_WIDTH * 0.5 || depth > GOAL_AREA_DEPTH, "{ball:?}");
         }
+        assert_eq!(
+            balls.iter().filter(|ball| ball.z > 0.0).count(),
+            BALLS_PER_PENALTY_BOX
+        );
         balls.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.z.total_cmp(&b.z)));
         for pair in balls.windows(2) {
             assert!(pair[0].distance(pair[1]) > 0.5, "{pair:?}");
         }
         assert!(WORLD_SIZE * 0.5 > PITCH_HALF_WIDTH + 1.0);
         assert!(WORLD_SIZE * 0.5 > PITCH_SOUTH.abs().max(PITCH_NORTH.abs()) + 1.0);
-        assert_eq!(PITCH_LENGTH, 105.0);
-        assert_eq!(PITCH_WIDTH, 68.0);
+        assert_eq!(PITCH_LENGTH, 100.0);
+        assert_eq!(PITCH_WIDTH, 64.0);
         assert_eq!(CENTER_CIRCLE_RADIUS, 9.15);
         assert_eq!(PENALTY_AREA_DEPTH, 16.5);
         assert_eq!(PENALTY_AREA_WIDTH, 40.32);
@@ -880,6 +1147,18 @@ mod tests {
             }
         }
         assert_eq!(halves, [BUCKETS_PER_HALF, BUCKETS_PER_HALF]);
+        for south in [true, false] {
+            let raised: Vec<_> = placed
+                .iter()
+                .filter(|place| (place.z > 0.0) == south && place.elevated)
+                .collect();
+            assert_eq!(raised.len(), ELEVATED_PER_HALF);
+            for place in raised {
+                let bucket = place.volume();
+                assert!((bucket.floor_y - (BUCKET_STAND_HEIGHT + BUCKET_WALL)).abs() < 1e-6);
+                assert!(bucket.contains(bucket.rest));
+            }
+        }
         for pair in placed.windows(2) {
             let apart = Vec2::new(pair[0].x, pair[0].z).distance(Vec2::new(pair[1].x, pair[1].z));
             if (pair[0].z > 0.0) == (pair[1].z > 0.0) {

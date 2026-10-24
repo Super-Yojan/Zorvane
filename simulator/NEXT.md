@@ -1,61 +1,110 @@
 # NEXT competition practice
 
-**TL;DR.** `TERRA_NEXT=1` loads a full soccer pitch. Zatara is rover 0 on `terra-ground`. Six tennis balls. Twenty open 5-gallon buckets. No scoring. Select `crab-trap-bot` to collect balls through its front opening.
+**TL;DR.** NEXT is Zorvane's default world: the NEXT Competition 2026 field on
+Field 3, West Campus, George Mason University, with no Google data. CrabTrapBot
+is rover 0 for the Red Alliance. 99 tennis balls in each penalty box, ten orange
+and ten blue buckets, some on 1 m stands. A narrated cutscene explains the rules.
+The simulator does not referee: scoring, tags and penalties are not enforced.
 
 ![NEXT pitch](../docs/assets/next.png)
 
-*105 m by 68 m. Zatara starts on the south goal line, between the posts, facing the field.*
+## The field, from the rules
 
-![Zatara driving](../docs/assets/drive.gif)
+The layout follows the *NEXT Competition 2026 Rules* (August 7, 2026):
 
-*Hold W, or send `cmd_vel`. The rover pushes balls. Buckets keep what crosses the mouth.*
+| Rule | In the simulator |
+| --- | --- |
+| 2.1 Regulation soccer field, about 100 m × 64 m | 100 × 64 m pitch, FIFA Law 1 markings, yellow lines 30 yd from each end line as on the real turf |
+| 2.2 Each alliance's Base is a 20 × 10 ft canopy tent | Red Base behind the south end line, Blue Base behind the north, west of each goal |
+| 3.1 99 balls in each penalty box | 99 per box, seeded spread, clear of the goal area so rovers start clear |
+| 3.2 10 orange and 10 blue 5-gallon buckets, ground level or 1 m | Orange (Red's targets) in the north half, blue (Blue's) in the south half; 4 per half on grey 1 m stands (the mix is a sim choice) |
+| 4 Scoring, 4.3 out-of-bounds, 4.4 tagging, 5.6 knocked buckets | Explained in the cutscene, not enforced |
 
-Zatara starts on the south goal line, centred on the goal, facing Bevy −Z (into the field).
-A second rover starts on the north goal line facing the other way. Further rovers split across the two goals and spread along the goal line.
-Balls rest just north of the centre spot.
-A ball dropped through an open bucket top is pulled toward the middle of the bucket.
-Boards run the touchlines and stop at each goal.
+Rover 0 starts on the south goal line facing north; further rovers split across
+the two goal lines. A ball dropped through an open bucket top is pulled toward
+the middle of the bucket, at ground level or on a stand. `TERRA_NEXT_SEED` moves
+the buckets and changes which stand (default 42).
 
-The pitch is the FIFA recommended international size, 105 m by 68 m, on a 120 m square. Centre circle, penalty areas, and goal areas use the Law 1 sizes. See [SCALE.md](../SCALE.md).
+The surroundings match the competition-day field in the NEXT2026 footage and the
+mapped campus: synthetic turf, a black chain-link perimeter fence with a west
+gate, four light towers, a scoreboard, the two Base tents, Field #4, the tennis
+courts, West Campus Parking and the woods, all from OpenStreetMap footprints.
+Everything a rover can hit has a collider. Buckets are Home Depot orange
+(#F96302, with a generic white label panel instead of the store logo) and blue
+(#1D5DB2, matched by eye to the footage). Balls carry optic-yellow felt with the
+white seam.
 
 ## Launch
 
 From the Zorvane repository root:
 
 ```sh
-TERRA_NEXT=1 TERRA_ZENOH=0 cargo run -p zorvane
+TERRA_ZENOH=0 cargo run -p zorvane
 ```
 
-`TERRA_ZENOH=0` leaves the primary rover on the keyboard. W and S drive forward and back, A and D turn, and Space commands a stop. With Zenoh left on, a remote client drives Zatara as rover 0. Zenoh keys stay `terra/rover/<id>/…`:
+The intro cutscene plays first: a camera tour of the field with captions and a
+voice-over of the rules. Enter skips it. `TERRA_ZENOH=0` leaves the primary rover
+on the keyboard: W and S drive forward and back, A and D turn, Space stops. With
+Zenoh on, a remote client drives rover 0. Zenoh keys stay `terra/rover/<id>/…`:
 
 ```sh
-TERRA_NEXT=1 cargo run -p zorvane
+cargo run -p zorvane
 python3 simulator/tools/zenoh_client.py --rover 0 drive --linear 0.8 --angular 0 --seconds 3
 ```
 
-Headless smoke, no window and no Zenoh:
+Headless smoke, no window, no cutscene and no Zenoh:
 
 ```sh
-TERRA_NEXT=1 TERRA_HEADLESS=1 TERRA_ZENOH=0 ZORVANE_SMOKE=1 cargo run -p zorvane
+TERRA_HEADLESS=1 TERRA_ZENOH=0 ZORVANE_SMOKE=1 cargo run -p zorvane
 ```
 
-`TERRA_NEXT=1` turns off the practice town and Terrarium tiles and sets the ground to a 120 m square. It also takes precedence over `TERRA_MISSION=1`. `TERRA_ROVER_COUNT` still changes the fleet; on this pitch the extra rovers line up on the two goal lines. `TERRA_NEXT_SEED` moves the twenty buckets (default 42). `ZORVANE_VEHICLE` still selects the body and defaults to `terra-ground`, which is what Zatara drives. `TERRA_HEADLESS=1` runs the same scene without a window.
+| Variable | Effect |
+| --- | --- |
+| `TERRA_NEXT=0` | Leave NEXT for the elevation map. An explicit `TERRA_TILES=1` does the same. |
+| `ZORVANE_VEHICLE` | Rover body. Defaults to `crab-trap-bot` on the NEXT field. |
+| `ZORVANE_CUTSCENE=0` | Skip the intro cutscene. `scripts/run-argos-local.sh` sets it. |
+| `TERRA_NEXT_LIGHTING` | `noon` (default), `overcast` or `evening`, for camera and detection data. |
+| `TERRA_NEXT_BALLS` | Extra balls scattered over the pitch, on top of the 198 in the boxes. |
+| `TERRA_NEXT_CAMERA=overview` | Spectator view over the west touchline instead of following rover 0. |
+| `TERRA_NEXT_SEED` | Bucket layout seed (default 42). |
 
-To practice collecting with the updated model:
-
-```sh
-TERRA_NEXT=1 TERRA_ZENOH=0 ZORVANE_VEHICLE=crab-trap-bot cargo run -p zorvane
-```
-
-The CrabTrapBot has an open-front collision frame. A ball entering the low, central intake is moved into a visible holding area inside the rover. The two simplified flap visuals swing inward as a ball approaches and return closed afterward. This is a one-way collection approximation: the STEP model's actual panel geometry, hinge torque, ball contacts with the panels, release into buckets, and scoring are not modeled. Other vehicles continue to push balls.
+CrabTrapBot has an open-front collision frame. A ball entering the low, central
+intake is moved into a visible holding area inside the rover, and the two flap
+visuals swing inward as it passes. This is a one-way collection approximation:
+launching, release into buckets, and the panels' real contact and hinge torque
+are not modeled.
 
 Startup prints a `Terra NEXT:` line with the ball and bucket counts.
+
+### Outdoor GPS
+
+The pitch is placed on Field 3 (below), so the bridge publishes a geographic
+`localization` report and simulated GPS on `navigation/outdoor`. ARGOS shows the
+rover at Field 3, and Terra's outdoor GPS navigation runs on the simulated field.
+
+### Rebuilding the assets
+
+The field's models and textures are generated, not hand-edited:
+
+```sh
+python3 simulator/tools/blender/fetch_osm.py
+/Applications/Blender.app/Contents/MacOS/Blender --background --factory-startup \
+    --python simulator/tools/blender/build_next_assets.py -- --out simulator/assets
+python3 simulator/tools/cutscene/make_voiceover.py
+```
+
+`fetch_osm.py` refreshes `mason_osm.json` (ODbL, © OpenStreetMap contributors).
+`build_next_assets.py` writes the surroundings, both buckets and the turf and
+ball textures; `--preview DIR` also renders reference images. The cutscene
+script is `simulator/assets/cutscene/next_intro.json`; `make_voiceover.py`
+speaks it with the macOS `Samantha` voice, encodes Ogg Vorbis with ffmpeg and
+rewrites each beat's timing.
 
 ## NEXT - GMU Stadium (desktop)
 
 The standard desktop build includes **NEXT - GMU Stadium** in the world menu.
-It runs the same competition on an independently authored 105 × 68 m pitch.
-Spectators see the real field's grass, markings, and surroundings from Google
+It runs the same competition on the authored 100 × 64 m pitch, opt-in with
+`TERRA_NEXT_GMU=1`. Spectators see the real field's grass, markings, and surroundings from Google
 Photorealistic 3D Tiles. The bright authored turf and generated markings are
 visible only to robot cameras while live scenery is available; they return to
 the spectator view during loading or offline practice. The field placement
@@ -118,18 +167,19 @@ The existing NEXT scene has no automatic scoring or competition referee.
 
 ### Placement
 
-The anchor is `38.833755825, -77.31659325`, the center of the independently mapped
-[OpenStreetMap soccer pitch](https://www.openstreetmap.org/way/233194670).
-Its mapped long edge provides the 4.81259° heading. Placement data is © OpenStreetMap
+The anchor is `38.833116675, -77.323160625`, the centroid of
+[Field #3](https://www.openstreetmap.org/way/233194680) on West Campus, where the
+NEXT 2026 rules place the competition. Its mapped long edge provides the 327.04°
+heading. Placement data is © OpenStreetMap
 contributors, available under the [ODbL](https://www.openstreetmap.org/copyright).
-The authored pitch retains NEXT's 105 × 68 m dimensions rather than copying a mesh.
-The default ellipsoid height is 95.74 m: independent USGS point elevation
-(127.60157 m) plus NOAA GEOID18's nearby geoid offset (-31.86 m), rounded.
+The authored pitch retains the rules' 100 × 64 m dimensions rather than copying a mesh.
+The default ellipsoid height is 85.13 m: independent USGS point elevation
+(116.988838 m) plus NOAA GEOID18's geoid offset there (-31.856 m), rounded.
 This is an approximate datum conversion and map alignment, not a field survey.
 No Google geometry was sampled for the simulation surface.
 
-Sources: [USGS point elevation](https://epqs.nationalmap.gov/v1/json?x=-77.31659325&y=38.833755825&units=Meters&wkid=4326&includeDate=false),
-[NOAA GEOID18 offset](https://geodesy.noaa.gov/api/geoid/ght?lat=38.833673&lon=-77.3161661&model=14).
+Sources: [USGS point elevation](https://epqs.nationalmap.gov/v1/json?x=-77.323160625&y=38.833116675&units=Meters&wkid=4326&includeDate=false),
+[NOAA GEOID18 offset](https://geodesy.noaa.gov/api/geoid/ght?lat=38.833116675&lon=-77.323160625&model=14).
 
 Set these before launch to use independently measured placement values:
 

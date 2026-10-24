@@ -66,6 +66,7 @@ impl Plugin for TerraWorldPlugin {
                     generate_world,
                     crate::landscape::generate_landscape,
                     crate::next_competition::spawn_field,
+                    crate::mason_field::spawn_surroundings,
                     crate::geo::spawn_patch,
                     finish_rebuild,
                 )
@@ -132,12 +133,17 @@ impl WorldConfig {
                 .map_err(|_| "TERRA_WORLD_SIZE must be a number of metres".to_owned())?;
         }
         config.tiles = crate::geo::GeoTileConfig::from_env()?;
+        // NEXT on Field 3, West Campus, is the default world. Google scenery
+        // is opt-in with TERRA_NEXT_GMU=1; TERRA_NEXT=0 restores the elevation map.
         #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-        let next = crate::next_competition::enabled() || crate::gmu::requested();
+        let google = crate::gmu::requested();
         #[cfg(not(all(feature = "gmu-viewer", not(target_arch = "wasm32"))))]
-        let next = false;
-        if next {
+        let google = false;
+        if google {
+            #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
             config.prepare_gmu_field();
+        } else if crate::next_competition::enabled() {
+            config.prepare_next_field();
         } else {
             config.tiles.enabled = true;
             config.scene = SceneKind::Tiles;
@@ -158,9 +164,15 @@ impl WorldConfig {
         self.landscape.enabled = false;
         self.show_grid = false;
         self.size = crate::next_competition::WORLD_SIZE;
-        // Behind the south goal, close enough to see the rover between the posts.
-        self.camera_offset = Vec3::new(0.0, 3.2, 5.5);
-        self.follow_rover = true;
+        if std::env::var("TERRA_NEXT_CAMERA").as_deref() == Ok("overview") {
+            // High over the west touchline, looking across at the east bleachers.
+            self.camera_offset = Vec3::new(-75.0, 38.0, 70.0);
+            self.follow_rover = false;
+        } else {
+            // Behind the south goal, close enough to see the rover between the posts.
+            self.camera_offset = Vec3::new(0.0, 3.2, 5.5);
+            self.follow_rover = true;
+        }
         self.scene = SceneKind::Next;
     }
 
@@ -231,9 +243,24 @@ fn generate_world(
     config: Res<WorldConfig>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    assets: Option<Res<AssetServer>>,
 ) {
+    let next = config.scene == SceneKind::Next;
+    // Around the NEXT pitch the apron is grass, continuous with the stadium.
+    let turf = assets
+        .as_deref()
+        .filter(|_| next)
+        .map(|assets| crate::next_competition::repeating(assets, crate::mason_field::TURF_TEXTURE));
     let ground_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.28, 0.34, 0.23),
+        base_color: if turf.is_some() {
+            Color::srgb(0.88, 0.9, 0.86)
+        } else {
+            Color::srgb(0.28, 0.34, 0.23)
+        },
+        base_color_texture: turf,
+        uv_transform: bevy::math::Affine2::from_scale(Vec2::splat(
+            config.size / crate::mason_field::TURF_REPEAT,
+        )),
         perceptual_roughness: 1.0,
         ..default()
     });
@@ -289,7 +316,8 @@ fn generate_world(
             }
         }
     }
-    for x in [-half, half] {
+    // Orange corner posts would read as buckets to NEXT object detection.
+    for x in [-half, half].into_iter().filter(|_| !next) {
         for z in [-half, half] {
             commands.spawn((
                 Name::new("World boundary marker"),
@@ -440,7 +468,12 @@ fn follow_rover(
     time: Res<Time>,
     rovers: FollowRovers<'_, '_>,
     mut cameras: Query<&mut Transform, (With<WorldCamera>, Without<Rover>)>,
+    cutscene: Option<Res<crate::cutscene::CutsceneActive>>,
 ) {
+    // The NEXT intro cutscene drives the camera while it plays.
+    if cutscene.is_some() {
+        return;
+    }
     if !config.follow_rover {
         if config.uses_google_scenery() {
             for mut camera in &mut cameras {

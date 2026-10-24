@@ -261,6 +261,7 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool) {
                     }
                     label(panel, "World", 14.0, Color::srgb(0.62, 0.68, 0.70));
                     for choice in [
+                        WorldChoice::Next,
                         WorldChoice::Tiles,
                         #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
                         WorldChoice::Gmu,

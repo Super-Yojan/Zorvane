@@ -1,3 +1,4 @@
 simulator/assets/models/*.glb filter=lfs diff=lfs merge=lfs -text
+simulator/assets/textures/*.png filter=lfs diff=lfs merge=lfs -text
 
 *.pdf binary

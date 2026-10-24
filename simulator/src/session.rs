@@ -20,9 +20,9 @@ impl WorldChoice {
         match self {
             Self::Town => "Practice town",
             Self::Tiles => "Outdoor map",
-            Self::Next => "NEXT pitch",
+            Self::Next => "NEXT - Field 3, West Campus",
             #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-            Self::Gmu => "NEXT - GMU Stadium",
+            Self::Gmu => "NEXT - Google scenery",
         }
     }
 
@@ -31,8 +31,9 @@ impl WorldChoice {
         if crate::gmu::requested() {
             return Self::Gmu;
         }
-        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-        if crate::next_competition::enabled() { return Self::Gmu; }
+        if crate::next_competition::enabled() {
+            return Self::Next;
+        }
         Self::Tiles
     }
 }

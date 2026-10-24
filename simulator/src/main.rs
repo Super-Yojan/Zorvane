@@ -1,5 +1,6 @@
 #[cfg(any(feature = "native", feature = "browser-bridge"))]
 mod bridge;
+mod cutscene;
 mod depth_camera;
 mod geo;
 #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
@@ -7,6 +8,7 @@ mod gmu;
 #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
 mod maps_key;
 mod landscape;
+mod mason_field;
 mod menu;
 mod mission;
 mod next_competition;
@@ -50,7 +52,13 @@ fn asset_root() -> String {
 fn main() {
     #[cfg(target_arch = "wasm32")]
     console_error_panic_hook::set_once();
-    let vehicles = zorvane_vehicle::VehicleRegistry::from_env().expect("invalid ZORVANE_VEHICLE");
+    // CrabTrapBot is the NEXT rover; ZORVANE_VEHICLE still chooses explicitly.
+    let vehicles = if std::env::var_os("ZORVANE_VEHICLE").is_none() && next_competition::enabled() {
+        zorvane_vehicle::VehicleRegistry::from_id(Some("crab-trap-bot"))
+    } else {
+        zorvane_vehicle::VehicleRegistry::from_env()
+    }
+    .expect("invalid ZORVANE_VEHICLE");
     let body = vehicles.active();
     let drive = terra::DriveConfig::from_body(body).unwrap_or_else(|reason| {
         panic!(
@@ -67,6 +75,8 @@ fn main() {
     }
     mission::install(&mut app);
     next_competition::install(&mut app);
+    mason_field::install(&mut app);
+    cutscene::install(&mut app);
     // A static host has no .meta sidecars. Skipping the lookup avoids a 404
     // before each asset, including the 118 MB rover mesh.
     #[cfg(target_arch = "wasm32")]

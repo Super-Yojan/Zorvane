@@ -1961,9 +1961,10 @@ fn drive_autonomy(
         let mut reference = patch.as_ref().map(|p| crate::outdoor::GeoReference {
             latitude: p.anchor.latitude, longitude: p.anchor.longitude, heading: 0.,
         });
-        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-        if world.as_ref().is_some_and(|w| w.gmu_stadium) {
-            reference = crate::gmu::geographic_reference();
+        // The NEXT pitch is placed on Field 3 (West Campus), with or without
+        // Google scenery, so outdoor GPS navigation works on it.
+        if world.as_ref().is_some_and(|w| w.scene == crate::world::SceneKind::Next) {
+            reference = crate::mason_field::geographic_reference();
         }
         tracked.outdoor.sensors(reference, pose, now);
         let evidence = |tracked: &AutonomousRover| terra_autonomy::outdoor::Evidence {
