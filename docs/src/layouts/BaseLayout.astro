@@ -212,11 +212,22 @@ const year = new Date().getFullYear();
                     );
                 });
 
+                // Hide on the way out and forget the position, so the next
+                // move shows the cursor again and snaps it to the pointer
+                // instead of gliding in from where it left.
+                const sleep = () => {
+                    awake = false;
+                    cursor.classList.remove("is-awake");
+                };
                 // pointerleave does not bubble, so this must sit on the root
                 // element — on `document` it would never fire.
-                document.documentElement.addEventListener("pointerleave", () =>
-                    cursor.classList.remove("is-awake"),
-                );
+                document.documentElement.addEventListener("pointerleave", sleep);
+                // A fast exit through the window edge can skip pointerleave;
+                // mouseout with no next element is the pointer leaving the page.
+                document.addEventListener("mouseout", (e) => {
+                    if (!e.relatedTarget) sleep();
+                });
+                window.addEventListener("blur", sleep);
 
                 // Lerp toward the pointer for the lagging feel; snap when the
                 // visitor asked for reduced motion.
