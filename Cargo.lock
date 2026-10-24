@@ -3468,6 +3468,13 @@ dependencies = [
 [[package]]
 name = "fpv-signaling"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "fpv-signaling"
+version = "0.1.0"
 source = "git+https://github.com/Super-Yojan/Terra.git?rev=309042d518a918247b38fb0c004283a967447dcd#309042d518a918247b38fb0c004283a967447dcd"
 dependencies = [
  "serde_json",
@@ -7852,6 +7859,7 @@ dependencies = [
 name = "terra-transport"
 version = "0.1.0"
 dependencies = [
+ "fpv-signaling 0.1.0",
  "serde_json",
  "terra-types",
  "zenoh",
@@ -10272,7 +10280,7 @@ dependencies = [
  "bevy",
  "bytes",
  "fastrand",
- "fpv-signaling",
+ "fpv-signaling 0.1.0 (git+https://github.com/Super-Yojan/Terra.git?rev=309042d518a918247b38fb0c004283a967447dcd)",
  "openh264",
  "serde",
  "serde_json",

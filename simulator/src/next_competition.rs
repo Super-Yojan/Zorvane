@@ -269,7 +269,7 @@ fn place_half(rng: &mut fastrand::Rng, south: bool) -> Vec<BucketPlace> {
 /// Goal-line spawn. Even slots take the south goal, odd slots the north goal.
 /// Forward is local −Z, so the south side uses identity and the north side yaws 180°.
 pub fn rover_spawn(slot: usize, count: usize, chassis: Vec3) -> (Vec3, Quat) {
-    let south = slot % 2 == 0;
+    let south = slot.is_multiple_of(2);
     let index = slot / 2;
     let on_side = if south { count.div_ceil(2) } else { count / 2 };
     let spacing = chassis.x + 0.25;
@@ -301,7 +301,7 @@ fn goal_line_xs(count: usize, spacing: f32, chassis_x: f32) -> Vec<f32> {
         .collect();
     let mut wing = 0usize;
     while xs.len() < count {
-        let side = if wing % 2 == 0 { -1.0 } else { 1.0 };
+        let side = if wing.is_multiple_of(2) { -1.0 } else { 1.0 };
         let step = (wing / 2) as f32;
         xs.push(
             side * (GOAL_WIDTH * 0.5 + GOAL_POST_WIDTH + chassis_x * 0.5 + 0.15 + step * spacing),
@@ -492,7 +492,7 @@ pub enum Alliance {
 
 impl Alliance {
     pub fn of_slot(slot: usize) -> Self {
-        if slot % 2 == 0 { Self::Red } else { Self::Blue }
+        if slot.is_multiple_of(2) { Self::Red } else { Self::Blue }
     }
     /// Rules 3.2b and 4: Red scores in orange, Blue in blue, both placed in
     /// the opposing half.
@@ -1219,7 +1219,7 @@ fn sync_full_crab_traps(
 }
 
 fn at_home_goal(slot: usize, position: Vec3, chassis: Vec3) -> bool {
-    let goal_z = if slot % 2 == 0 {
+    let goal_z = if slot.is_multiple_of(2) {
         PITCH_SOUTH
     } else {
         PITCH_NORTH
@@ -1718,17 +1718,15 @@ fn load_world_clicks(
     };
     let mut nearest = None;
     for (rover, _, position, rotation, _) in &mut rovers {
-        if let Some(distance) = ray_hits_rover(ray, position.0, rotation.0, physics.chassis_size) {
-            if nearest.is_none_or(|(_, best)| distance < best) {
+        if let Some(distance) = ray_hits_rover(ray, position.0, rotation.0, physics.chassis_size)
+            && nearest.is_none_or(|(_, best)| distance < best) {
                 nearest = Some((rover, distance));
             }
-        }
     }
-    if let Some((rover, _)) = nearest {
-        if let Ok((_, _, _, _, mut load)) = rovers.get_mut(rover) {
+    if let Some((rover, _)) = nearest
+        && let Ok((_, _, _, _, mut load)) = rovers.get_mut(rover) {
             load_rover_once(rover, &mut load, &carried_visuals, &mut commands);
         }
-    }
 }
 
 fn sync_waiting_markers(
@@ -1995,13 +1993,12 @@ fn settle_deposits(
             if !bucket.contains(position.0) {
                 continue;
             }
-            if let Some(DumpedBall(alliance)) = dumped {
-                if let Some(score) = score.as_mut() {
+            if let Some(DumpedBall(alliance)) = dumped
+                && let Some(score) = score.as_mut() {
                     let points = side.map_or(0, |side| bucket_points(*alliance, *side, *bucket));
                     score.add(*alliance, points);
                     commands.entity(ball).remove::<DumpedBall>();
                 }
-            }
             let to_rest = Vec3::new(bucket.rest.x - position.x, 0.0, bucket.rest.z - position.z);
             let pull = to_rest.clamp_length_max(0.25) * 8.0;
             velocity.x += pull.x * dt;

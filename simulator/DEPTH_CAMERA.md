@@ -6,7 +6,7 @@
 
 *Just ahead of the chassis, looking along local −Z.*
 
-The lower-right square of the window is the depth preview for rover 0.
+The lower-right square of the window is the depth preview for rover 0. The start and pause menus toggle it (`preview` is the initial state; `sync_previews` adds or removes it as that flag changes).
 
 `TerraDepthCameraPlugin` is registered in `main.rs`. It mounts one sensor on each new rover. The mount is in metres and ignores GLB scale.
 

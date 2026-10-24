@@ -60,9 +60,11 @@ with about 550,000 triangles. The visual is rotated 90° clockwise from above
 so the intake faces local −Z, then scaled by 0.001 to metres. Its dimensions
 are about 0.607 × 0.614 × 0.601 m. The simulated collision frame has an open
 front; in NEXT, simplified inward-swinging flap visuals and a one-way collection
-rule hold tennis balls. Wheel radius, track width,
-motor limit, and mass still use Terra's provisional values until measured from
-the new hardware. The visual mesh does not provide wheel joints or collision
+rule hold tennis balls. Wheel radius (72 mm, goBILDA 144 mm wheels) and track
+width (52.6 cm between tyre centres) come from the Fusion assembly. Its four
+wheels skid-steer, so the effective turning track on the real rover is wider
+than the geometric one. The motor limit and mass are still provisional until
+measured on the hardware; the motor limit keeps Terra's ~2.29 m/s linear cap. The visual mesh does not provide wheel joints or collision
 geometry.
 
 The optimized GLB was made with `gltfpack -si 0.02 -se 0.02 -sp -noq` and

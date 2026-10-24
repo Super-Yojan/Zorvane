@@ -28,6 +28,8 @@ struct RestartButton;
 struct PauseButton;
 #[derive(Component)]
 struct RoverStep(i32);
+#[derive(Component)]
+struct PreviewToggle;
 
 fn spawn_ui_camera(mut commands: Commands) {
     commands.spawn((
@@ -73,6 +75,8 @@ fn clicks(
     resume: Query<&Interaction, (Changed<Interaction>, With<ResumeButton>)>,
     restart: Query<&Interaction, (Changed<Interaction>, With<RestartButton>)>,
     pause: Query<&Interaction, (Changed<Interaction>, With<PauseButton>)>,
+    toggle: Query<&Interaction, (Changed<Interaction>, With<PreviewToggle>)>,
+    mut depth: Option<ResMut<crate::depth_camera::DepthCameraConfig>>,
     steps: Query<(&Interaction, &RoverStep), Changed<Interaction>>,
 ) {
     let pressed = |interaction: &Interaction| *interaction == Interaction::Pressed;
@@ -85,6 +89,12 @@ fn clicks(
             session.rover_count = next;
             session.ui_epoch = session.ui_epoch.wrapping_add(1);
         }
+    }
+    if toggle.iter().any(pressed) {
+        if let Some(depth) = depth.as_mut() {
+            depth.preview = !depth.preview;
+        }
+        session.ui_epoch = session.ui_epoch.wrapping_add(1);
     }
     if start.iter().any(pressed) && session.phase == Phase::Menu {
         session.phase = Phase::Playing;
@@ -112,6 +122,7 @@ fn clicks(
 fn rebuild_ui(
     mut commands: Commands,
     session: Res<SimSession>,
+    depth: Option<Res<crate::depth_camera::DepthCameraConfig>>,
     roots: Query<Entity, With<MenuRoot>>,
     mut built: Local<u32>,
 ) {
@@ -122,10 +133,11 @@ fn rebuild_ui(
     for entity in &roots {
         commands.entity(entity).despawn();
     }
+    let preview_on = depth.is_none_or(|depth| depth.preview);
     match session.phase {
         Phase::Playing => spawn_pause_chip(&mut commands),
-        Phase::Menu => spawn_panel(&mut commands, &session, false),
-        Phase::Paused => spawn_panel(&mut commands, &session, true),
+        Phase::Menu => spawn_panel(&mut commands, &session, false, preview_on),
+        Phase::Paused => spawn_panel(&mut commands, &session, true, preview_on),
     }
 }
 
@@ -158,7 +170,7 @@ fn spawn_pause_chip(commands: &mut Commands) {
         });
 }
 
-fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool) {
+fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool, preview_on: bool) {
     commands
         .spawn((
             MenuRoot,
@@ -210,6 +222,12 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool) {
                             label(row, &format!("{}", session.rover_count), 22.0, Color::WHITE);
                             button(row, "+", RoverStep(1), false);
                         });
+                    button(
+                        panel,
+                        &format!("Depth preview: {}", if preview_on { "on" } else { "off" }),
+                        PreviewToggle,
+                        false,
+                    );
                     if paused {
                         panel
                             .spawn(Node {
@@ -286,12 +304,18 @@ mod tests {
 
     #[test]
     fn menu_runs_start_pause_resume_restart() {
+        use crate::depth_camera::DepthCameraConfig;
         let mut app = App::new();
         app.insert_resource(SimSession::at_menu(1))
+            .insert_resource(DepthCameraConfig::default())
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Time<Virtual>>()
             .add_plugins(MenuPlugin);
         app.update();
+        press::<PreviewToggle>(&mut app);
+        assert!(!app.world().resource::<DepthCameraConfig>().preview);
+        press::<PreviewToggle>(&mut app);
+        assert!(app.world().resource::<DepthCameraConfig>().preview);
         press::<StartButton>(&mut app);
         assert_eq!(app.world().resource::<SimSession>().phase, Phase::Playing);
         assert!(app.world().contains_resource::<RebuildWorld>());

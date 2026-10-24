@@ -129,6 +129,15 @@ impl VehicleBody for TerraGround {
     }
 }
 
+/// Wheel radius of CrabTrapBot's goBILDA `3616-0014-0144` (144 mm) wheels, metres.
+/// Matches the Fusion assembly: hub centres 2.0 cm below the frame origin, lowest
+/// tyre point 9.1 cm below it.
+pub const CRAB_TRAP_BOT_WHEEL_RADIUS_M: f32 = 0.072;
+
+/// Distance between CrabTrapBot's left and right tyre centres in the Fusion
+/// assembly (y ≈ 42.1 cm and −10.5 cm), metres. Its four wheels skid-steer.
+pub const CRAB_TRAP_BOT_TRACK_WIDTH_M: f32 = 0.526;
+
 /// Simplified CrabTrapBot CAD visual. Its STEP coordinates are millimetres;
 /// the GLB is centered on its bounds before the visual scale is applied.
 #[derive(Clone, Copy, Debug, Default)]
@@ -160,9 +169,17 @@ impl VehicleBody for CrabTrapBot {
     }
 
     fn locomotion(&self) -> Locomotion {
-        // Retain Terra's differential-drive parameters until the new wheel
-        // radius, track, and motor limits are measured.
-        TerraGround.locomotion()
+        Locomotion::DifferentialDrive(DifferentialDriveSpec {
+            wheel_radius_m: CRAB_TRAP_BOT_WHEEL_RADIUS_M,
+            track_width_m: CRAB_TRAP_BOT_TRACK_WIDTH_M,
+            // Motor limits are not measured yet. Keep TerraGround's ~2.29 m/s
+            // linear cap at this wheel radius.
+            max_wheel_speed_rad_s: 20.0 * 0.0254 / CENTIMETRE_IN_METRES
+                * (CAD_WHEEL_RADIUS_CM * CENTIMETRE_IN_METRES)
+                / CRAB_TRAP_BOT_WHEEL_RADIUS_M,
+            keyboard_linear_speed: 1.5,
+            keyboard_angular_speed: 1.5,
+        })
     }
 }
 
@@ -302,7 +319,19 @@ mod tests {
         assert_eq!(body.visual().asset_path, "models/crab_trap_bot_sim.glb");
         assert_eq!(body.chassis().visual_scale, 0.001);
         assert_eq!(body.chassis().size_xyz, [0.607, 0.614, 0.601]);
-        assert!(body.locomotion().differential().is_ok());
+        let locomotion = body.locomotion();
+        let drive = locomotion.differential().unwrap();
+        assert_eq!(drive.wheel_radius_m, CRAB_TRAP_BOT_WHEEL_RADIUS_M);
+        assert_eq!(drive.track_width_m, CRAB_TRAP_BOT_TRACK_WIDTH_M);
+        // Same linear speed cap as TerraGround, on the larger wheel.
+        let terra = TerraGround.locomotion();
+        let terra = terra.differential().unwrap();
+        let linear_cap = drive.max_wheel_speed_rad_s * drive.wheel_radius_m;
+        let terra_cap = terra.max_wheel_speed_rad_s * terra.wheel_radius_m;
+        assert!(
+            (linear_cap - terra_cap).abs() < 1e-4,
+            "{linear_cap} vs {terra_cap}"
+        );
     }
 
     #[test]

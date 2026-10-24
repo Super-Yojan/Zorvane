@@ -43,7 +43,12 @@ impl Plugin for TerraDepthCameraPlugin {
         app.insert_resource(self.config.clone())
             .add_systems(
                 Update,
-                (mount_cameras, remove_orphan_previews, receive_depth),
+                (
+                    mount_cameras,
+                    sync_previews,
+                    remove_orphan_previews,
+                    receive_depth,
+                ),
             )
             .init_resource::<CaptureQueue>()
             .add_systems(
@@ -262,86 +267,106 @@ fn mount_cameras(
         );
         preview.sampler = ImageSampler::nearest();
         let preview_texture = images.add(preview);
-        let sensor = commands
+        commands.spawn((
+            Name::new("Terra front depth camera"),
+            id.copied().unwrap_or(crate::terra::RoverId(0)),
+            DepthCamera {
+                config: config.clone(),
+                depth_texture: depth_texture.clone(),
+                preview_texture: preview_texture.clone(),
+            },
+            DepthFrame {
+                width: extent.width,
+                height: extent.height,
+                ..default()
+            },
+            Camera3d {
+                depth_texture_usages: (TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC)
+                    .into(),
+                ..default()
+            },
+            Camera {
+                order: -1 - slot.map_or(0, |slot| slot.0 as isize),
+                ..default()
+            },
+            RenderTarget::None {
+                size: config.resolution,
+            },
+            Projection::Perspective(PerspectiveProjection {
+                fov: config.vertical_fov,
+                near: config.near,
+                far: config.far,
+                aspect_ratio: extent.width as f32 / extent.height as f32,
+                ..default()
+            }),
+            Msaa::Off,
+            DepthPrepass,
+            Transform::from_xyz(
+                0.0,
+                config.mount_height,
+                -physics.chassis_size.z / 2.0 - config.front_clearance,
+            ),
+            ChildOf(rover),
+            DepthCapture,
+            bevy::camera::visibility::RenderLayers::from_layers(&[0, 2]),
+        ));
+    }
+}
+
+/// The on-screen preview follows `config.preview`, so a menu toggle applies at once.
+fn sync_previews(
+    mut commands: Commands,
+    config: Res<DepthCameraConfig>,
+    sensors: Query<(Entity, &DepthCamera, Option<&ChildOf>)>,
+    slots: Query<&crate::terra::RoverSlot>,
+    previews: Query<(Entity, &DepthPreview)>,
+) {
+    if !config.preview {
+        for (entity, _) in &previews {
+            commands.entity(entity).despawn();
+        }
+        return;
+    }
+    for (sensor, camera, parent) in &sensors {
+        let slot = parent.and_then(|child| slots.get(child.parent()).ok());
+        if slot.is_some_and(|slot| slot.0 != 0)
+            || previews.iter().any(|(_, preview)| preview.0 == sensor)
+        {
+            continue;
+        }
+        commands
             .spawn((
-                Name::new("Terra front depth camera"),
-                id.copied().unwrap_or(crate::terra::RoverId(0)),
-                DepthCamera {
-                    config: config.clone(),
-                    depth_texture: depth_texture.clone(),
-                    preview_texture: preview_texture.clone(),
-                },
-                DepthFrame {
-                    width: extent.width,
-                    height: extent.height,
+                Name::new("Front depth preview"),
+                DepthPreview(sensor),
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: px(16.0),
+                    bottom: px(16.0),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::all(px(8.0)),
+                    row_gap: px(6.0),
                     ..default()
                 },
-                Camera3d {
-                    depth_texture_usages: (TextureUsages::RENDER_ATTACHMENT
-                        | TextureUsages::COPY_SRC)
-                        .into(),
-                    ..default()
-                },
-                Camera {
-                    order: -1 - slot.map_or(0, |slot| slot.0 as isize),
-                    ..default()
-                },
-                RenderTarget::None {
-                    size: config.resolution,
-                },
-                Projection::Perspective(PerspectiveProjection {
-                    fov: config.vertical_fov,
-                    near: config.near,
-                    far: config.far,
-                    aspect_ratio: extent.width as f32 / extent.height as f32,
-                    ..default()
-                }),
-                Msaa::Off,
-                DepthPrepass,
-                Transform::from_xyz(
-                    0.0,
-                    config.mount_height,
-                    -physics.chassis_size.z / 2.0 - config.front_clearance,
-                ),
-                ChildOf(rover),
-                DepthCapture,
-                bevy::camera::visibility::RenderLayers::from_layers(&[0, 2]),
+                BackgroundColor(Color::srgba(0.02, 0.02, 0.02, 0.9)),
             ))
-            .id();
-        if config.preview && slot.is_none_or(|slot| slot.0 == 0) {
-            commands
-                .spawn((
-                    Name::new("Front depth preview"),
-                    DepthPreview(sensor),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        right: px(16.0),
-                        bottom: px(16.0),
-                        flex_direction: FlexDirection::Column,
-                        padding: UiRect::all(px(8.0)),
-                        row_gap: px(6.0),
+            .with_children(|parent| {
+                parent.spawn((
+                    Text::new("Front depth · metres · near = bright"),
+                    TextFont {
+                        font_size: FontSize::Px(14.0),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.02, 0.02, 0.02, 0.9)),
-                ))
-                .with_children(|parent| {
-                    parent.spawn((
-                        Text::new("Front depth · metres · near = bright"),
-                        TextFont {
-                            font_size: FontSize::Px(14.0),
-                            ..default()
-                        },
-                    ));
-                    parent.spawn((
-                        ImageNode::new(preview_texture),
-                        Node {
-                            width: px(256.0),
-                            height: px(256.0 * extent.height as f32 / extent.width as f32),
-                            ..default()
-                        },
-                    ));
-                });
-        }
+                ));
+                parent.spawn((
+                    ImageNode::new(camera.preview_texture.clone()),
+                    Node {
+                        width: px(256.0),
+                        height: px(256.0 * camera.config.resolution.y as f32
+                            / camera.config.resolution.x as f32),
+                        ..default()
+                    },
+                ));
+            });
     }
 }
 
@@ -516,6 +541,35 @@ fn remove_orphan_previews(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_follows_the_config_flag() {
+        let mut app = App::new();
+        app.insert_resource(DepthCameraConfig::default())
+            .add_systems(Update, sync_previews);
+        let rover = app.world_mut().spawn(Rover).id();
+        let config = DepthCameraConfig::default();
+        app.world_mut().spawn((
+            DepthCamera {
+                config,
+                depth_texture: default(),
+                preview_texture: default(),
+            },
+            ChildOf(rover),
+        ));
+        let previews = |app: &mut App| {
+            let mut query = app.world_mut().query::<&DepthPreview>();
+            query.iter(app.world()).count()
+        };
+        app.update();
+        assert_eq!(previews(&mut app), 1);
+        app.world_mut().resource_mut::<DepthCameraConfig>().preview = false;
+        app.update();
+        assert_eq!(previews(&mut app), 0);
+        app.world_mut().resource_mut::<DepthCameraConfig>().preview = true;
+        app.update();
+        assert_eq!(previews(&mut app), 1);
+    }
 
     #[test]
     #[ignore = "requires a GPU; run explicitly to verify depth rendering and readback"]

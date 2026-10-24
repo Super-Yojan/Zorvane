@@ -2104,11 +2104,10 @@ fn drive_autonomy(
                     continue;
                 }
                 if kind == "mission/report" {
-                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&payload) {
-                        if let Some(target) = v["survivor_id"].as_u64() {
+                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&payload)
+                        && let Some(target) = v["survivor_id"].as_u64() {
                             runtime.mission.report(id.0, target, now);
                         }
-                    }
                     continue;
                 }
                 let _ = rt.ingest(terra_runtime::RuntimeEvent::Remote {
