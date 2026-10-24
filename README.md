@@ -22,6 +22,31 @@ Builds for macOS, Windows and Linux are on the
 `zorvane`; the intro cutscene explains the game. The simulator listens on
 `tcp/127.0.0.1:7447` with prefix `terra/rover`.
 
+## Releases
+
+Pushing a `v*` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml):
+it builds macOS (Apple Silicon), Windows (x64) and Linux (x64), packages each
+with [`scripts/package.py`](scripts/package.py), and opens a draft GitHub
+Release with the three zips. Review the draft, then publish it.
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Running the workflow by hand builds the zips as workflow artifacts without a
+release. The macOS app is signed and notarized when these repository secrets
+are set, and ships unsigned otherwise:
+
+| Secret | Value |
+| --- | --- |
+| `APPLE_CERTIFICATE` | Developer ID Application certificate and key, as a base64 `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | Password of that `.p12` |
+| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: Name (TEAMID)` |
+| `APPLE_ID` | Apple ID used for notarization |
+| `APPLE_TEAM_ID` | Ten-character team ID |
+| `APPLE_APP_PASSWORD` | App-specific password for that Apple ID |
+
 ## Build from source
 
 Rust 1.85 or newer, Git LFS, and a sibling `Terra` checkout at the revision in

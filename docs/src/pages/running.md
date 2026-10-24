@@ -4,7 +4,15 @@ title: Download and run
 description: Get Zorvane for macOS, Windows or Linux and start a NEXT match. Zenoh listens on tcp/127.0.0.1:7447.
 ---
 
-Builds are on the [releases page](https://github.com/Super-Yojan/Zorvane/releases): one zip each for macOS, Windows and Linux. Unzip it and run `zorvane`. The assets folder ships beside the executable, or inside the app bundle on macOS.
+Builds are on the [releases page](https://github.com/Super-Yojan/Zorvane/releases): one zip each for macOS (Apple Silicon), Windows (x64) and Linux (x64).
+
+| Platform | Run |
+| --- | --- |
+| macOS | Open `Zorvane.app`. If macOS says it can't verify the developer, right-click the app, choose **Open**, then **Open** again |
+| Windows | Double-click `zorvane.exe`. SmartScreen may ask once: **More info**, then **Run anyway** |
+| Linux | `./zorvane`. It needs Vulkan, ALSA and udev: on Debian or Ubuntu, `libvulkan1 mesa-vulkan-drivers libasound2 libudev1` |
+
+Keep the `assets` folder beside the executable; on macOS it is inside the app.
 
 The first window is the start menu. Choose how many rovers, then press **Start**. A narrated cutscene walks through the field and the rules; Enter skips it.
 

@@ -1,0 +1,157 @@
+name: Release
+
+# A v* tag builds every platform and opens a draft GitHub Release with the
+# zips attached; publish the draft by hand. Run it manually to build the
+# packages as workflow artifacts without making a release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zorvane-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            os: macos-14
+            binary: target/release/zorvane
+          - platform: windows-x64
+            os: windows-latest
+            binary: target/release/zorvane.exe
+          - platform: linux-x64
+            # The oldest supported runner, for the widest glibc reach.
+            os: ubuntu-22.04
+            binary: target/release/zorvane
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Shared Terra source
+        run: bash .github/scripts/checkout-terra.sh
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: System packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config build-essential clang lld cmake \
+            libwayland-dev libxkbcommon-dev libvulkan-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libx11-xcb-dev libasound2-dev libudev-dev
+
+      # A parallel Bevy link can exceed the hosted runner's memory.
+      - name: Add swap
+        if: runner.os == 'Linux'
+        run: |
+          sudo fallocate -l 16G /swapfile2
+          sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2
+          sudo swapon /swapfile2
+
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build
+        env:
+          CARGO_BUILD_JOBS: "2"
+        run: cargo build --release --locked -p zorvane
+
+      - name: Package
+        id: package
+        run: >
+          ${{ runner.os == 'Windows' && 'python' || 'python3' }} scripts/package.py --binary "${{ matrix.binary }}"
+          --platform "${{ matrix.platform }}" --version "${{ steps.version.outputs.version }}"
+          --out dist
+
+      # Signing and notarization run only when the Apple secrets are set;
+      # without them the app ships unsigned and Gatekeeper asks once.
+      - name: Sign and notarize
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          stage="${{ steps.package.outputs.stage }}"
+          app="$stage/Zorvane.app"
+          archive="dist/${{ steps.package.outputs.name }}.zip"
+          if [[ -z "${APPLE_CERTIFICATE:-}" ]]; then
+            echo "::warning::No Apple signing secrets; the macOS app is unsigned."
+            ditto -c -k --keepParent "$stage" "$archive"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password=$(openssl rand -hex 16)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain"
+          read -ra keychains <<< "$(security list-keychains -d user | tr -d '"')"
+          security list-keychains -d user -s "$keychain" "${keychains[@]}"
+          codesign --force --options runtime --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" "$app"
+          codesign --verify --strict --verbose=2 "$app"
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --wait \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+          xcrun stapler staple "$app"
+          ditto -c -k --keepParent "$stage" "$archive"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: dist/${{ steps.package.outputs.name }}.zip
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" dist/*.zip
+          --repo "$GITHUB_REPOSITORY" --draft --generate-notes
+          --title "Zorvane ${GITHUB_REF_NAME#v}"
