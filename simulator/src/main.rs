@@ -2,6 +2,8 @@
 mod bridge;
 mod cutscene;
 mod depth_camera;
+#[cfg(feature = "native")]
+mod fpv;
 mod geo;
 #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
 mod gmu;
@@ -160,6 +162,8 @@ fn main() {
                 config: bridge::BridgeConfig::from_env(),
             },
         ));
+    #[cfg(feature = "native")]
+    install_fpv(&mut app);
     #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
     if let Err(message) = gmu::install(&mut app) {
         eprintln!("GMU setup: {message}");
@@ -178,6 +182,30 @@ fn main() {
         bevy::ecs::error::warn,
     ));
     app.run();
+}
+
+/// WebRTC FPV for dashboards, on the simulator's own Zenoh router. Off with the
+/// bridge (`TERRA_ZENOH=0`) or with `ZORVANE_FPV=0`.
+#[cfg(feature = "native")]
+fn install_fpv(app: &mut App) {
+    let config = bridge::BridgeConfig::from_env();
+    if !config.enabled || std::env::var("ZORVANE_FPV").as_deref() == Ok("0") {
+        return;
+    }
+    let (endpoint, credentials) = if !config.listen.is_empty() {
+        (config.listen.replace("0.0.0.0", "127.0.0.1"), None)
+    } else if let Some(remote) = config.connect.first() {
+        (remote.clone(), config.user.clone().zip(config.password.clone()))
+    } else {
+        return;
+    };
+    let (user, password) = credentials.unzip();
+    app.add_plugins(fpv::TerraFpvPlugin {
+        endpoint,
+        prefix: config.prefix,
+        user,
+        password,
+    });
 }
 
 /// Headless boot check. Exits after a few frames once the world schedule is running.

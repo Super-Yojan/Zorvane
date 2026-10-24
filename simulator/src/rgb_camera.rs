@@ -87,7 +87,7 @@ fn mount_rgb_cameras(
             .observe(receive_rgb);
     }
 }
-fn strip_padding(data: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
+pub(crate) fn strip_padding(data: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
     if width == 0 || height == 0 {
         return None;
     }

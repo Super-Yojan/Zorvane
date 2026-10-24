@@ -8,7 +8,7 @@ publish = false
 [features]
 default = ["native"]
 # Threads, Zenoh, and the voxel mesher stay on the desktop build.
-native = ["dep:terra-observability", "dep:zenoh", "dep:terra-transport", "dep:bevy_voxel_world", "dep:bevytiles", "gmu-viewer"]
+native = ["dep:terra-observability", "dep:zenoh", "dep:terra-transport", "dep:bevy_voxel_world", "dep:bevytiles", "gmu-viewer", "dep:fpv-signaling", "dep:webrtc", "dep:openh264", "dep:tokio", "dep:bytes"]
 browser-bridge = ["bevy/webgpu"]
 gmu-viewer = ["dep:bevy_3d_tiles", "dep:bevy_3d_tiles_prepare", "dep:draco-core"]
 
@@ -17,6 +17,13 @@ name = "gmu_viewer"
 required-features = ["gmu-viewer"]
 
 [dependencies]
+# WebRTC FPV, as TerraPhone streams it. Same pins as ARGOS, so both ends speak
+# the same fpv-signaling revision.
+fpv-signaling = { git = "https://github.com/Super-Yojan/Terra.git", rev = "309042d518a918247b38fb0c004283a967447dcd", optional = true }
+webrtc = { version = "=0.17.2", optional = true }
+openh264 = { version = "=0.9.9", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"], optional = true }
+bytes = { version = "1", optional = true }
 terra-runtime.workspace = true
 terra-observability = { path = "../../Terra/crates/terra-observability", optional = true }
 zorvane-vehicle.workspace = true
