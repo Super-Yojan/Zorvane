@@ -1,0 +1,53 @@
+---
+import DocPage from "../layouts/DocPage.astro";
+import { href, pages } from "../consts";
+---
+
+<DocPage
+    title="Zorvane"
+    description="The NEXT competition simulator. Build a dashboard against it, then point the same dashboard at a real rover."
+    kicker="Simulator"
+    backHref="https://super-yojan.dev/docs"
+    backLabel="All docs"
+>
+    <p>
+        Zorvane runs the NEXT 2026 field on Field 3, West Campus, at its real
+        latitude and longitude. CrabTrapBot collects tennis balls, carries them
+        back to its goal, and dumps them into its alliance's buckets. The rover
+        speaks the same Zenoh topics and WebRTC video as a real Terra rover, so
+        nothing in your dashboard is simulator-only.
+    </p>
+
+    <figure>
+        <img
+            src={href("/media/next.png")}
+            alt="The NEXT pitch in Zorvane: a soccer field with tennis balls in the penalty boxes and orange and blue buckets."
+            width="960"
+            height="540"
+        />
+        <figcaption>Field 3. Orange buckets are Red's targets, blue are Blue's.</figcaption>
+    </figure>
+
+    {
+        pages.map((page, index) => (
+            <section class="guide">
+                <p class="t-label">{String(index + 1).padStart(2, "0")}</p>
+                <h2>
+                    <a class="link-wipe" href={href(page.path)}>{page.label}</a>
+                </h2>
+                <p>{page.blurb}</p>
+            </section>
+        ))
+    }
+</DocPage>
+
+<style>
+    .guide {
+        margin-top: 48px;
+        padding-top: 32px;
+        border-top: 1px solid var(--rule);
+    }
+    .guide :global(h2) {
+        margin-top: 12px;
+    }
+</style>

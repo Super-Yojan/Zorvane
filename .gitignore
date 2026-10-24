@@ -1,13 +1,10 @@
 /target/
 simulator/target/
-simulator/dist/
-simulator/dist-webgpu/
-site/
-docs/reference/
+docs/node_modules/
+docs/dist/
+docs/.astro/
 __pycache__/
 *.pyc
-*.egg-info/
-simulator/.cache/
 simulator/runs/
 .DS_Store
 *.swp
