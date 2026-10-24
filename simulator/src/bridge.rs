@@ -2511,6 +2511,85 @@ mod autonomy_integration_tests {
     }
 
     #[test]
+    fn a_bound_reset_clears_an_emergency_stop_and_teleop_drives_again() {
+        let shared = Arc::new(Shared::default());
+        shared.connected.store(true, Ordering::Release);
+        shared.commands.lock().unwrap().insert(1, None);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Bridge {
+                shared: shared.clone(),
+            })
+            .add_systems(FixedUpdate, drive_autonomy);
+        let rt = terra_runtime::Runtime::new(
+            terra_runtime::RuntimeConfig {
+                mode: terra_runtime::ActuationMode::DirectEffort,
+                ..Default::default()
+            },
+            "test-1".into(),
+        )
+        .unwrap();
+        app.world_mut().spawn((
+            Rover,
+            RoverId(1),
+            ZenohControlled,
+            Transform::default(),
+            DriveCommand::default(),
+            crate::velocity_controller::VelocityControlState::new(rt),
+        ));
+        let step = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<Time<Fixed>>()
+                .advance_by(Duration::from_millis(10));
+            app.world_mut().run_schedule(FixedUpdate);
+        };
+        let status = |shared: &Shared| -> serde_json::Value {
+            let states = &shared.outgoing.lock().unwrap().states;
+            serde_json::from_slice(&states[&(1, "autonomy/status".into())]).unwrap()
+        };
+        let linear = |app: &mut App| {
+            let mut q = app.world_mut().query::<&DriveCommand>();
+            q.single(app.world()).unwrap().linear
+        };
+        step(&mut app);
+        shared.receive(
+            "terra/rover",
+            "terra/rover/1/safety",
+            br#"{"action":"stop","token":"stop-1"}"#,
+        );
+        step(&mut app);
+        assert_eq!(status(&shared)["safety"], "emergency_stop");
+        // Like teleop, a reset must be bound to the current run and revision.
+        shared.receive(
+            "terra/rover",
+            "terra/rover/1/safety",
+            br#"{"action":"reset","token":"reset-unbound"}"#,
+        );
+        step(&mut app);
+        assert_eq!(status(&shared)["result"], "rejected");
+        assert_eq!(status(&shared)["safety"], "emergency_stop");
+        let (run, revision) = shared.authorities.lock().unwrap()[&1].clone();
+        let reset = serde_json::json!({"action":"reset","token":"reset-1","run_id":run,"authority_revision":revision});
+        shared.receive(
+            "terra/rover",
+            "terra/rover/1/safety",
+            &serde_json::to_vec(&reset).unwrap(),
+        );
+        step(&mut app);
+        assert_eq!(status(&shared)["result"], "accepted");
+        assert_eq!(status(&shared)["safety"], "clear");
+        let (run, revision) = shared.authorities.lock().unwrap()[&1].clone();
+        let teleop = serde_json::json!({"linear":0.3,"angular":0,"run_id":run,"authority_revision":revision,"operator_session_id":"test","sequence":1});
+        shared.receive(
+            "terra/rover",
+            "terra/rover/1/teleop",
+            &serde_json::to_vec(&teleop).unwrap(),
+        );
+        step(&mut app);
+        assert_eq!(linear(&mut app), 0.3);
+    }
+
+    #[test]
     fn hardware_disarm_holds_motion_until_a_fresh_arm() {
         let shared = Arc::new(Shared::default());
         shared.connected.store(true, Ordering::Release);

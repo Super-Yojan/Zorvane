@@ -51,8 +51,10 @@ python3 tools/zenoh_client.py --rover 0 goto --cancel
 
 `frames` writes each rover's latest `rgb.npy` (`(height, width, 4)` uint8 sRGB
 RGBA), `depth.npy` (`(height, width)` float32 axial metres, NaN for no return),
-the JSON metadata and an RGB PPM. `drive` sends bound `teleop` at 20 Hz and a
-zero on completion or Ctrl-C.
+the JSON metadata and an RGB PPM. `drive` selects the `teleop` level, sends
+bound `teleop` at 20 Hz, and sends a zero on completion or Ctrl-C. `goto` selects
+`waypoint_direct` (or `--level waypoint`), sends one bound goal and prints
+`goal/status` until `arrived`.
 
 ## Driving: bound teleop
 
@@ -74,10 +76,11 @@ command with an old `run_id` or `authority_revision` is ignored, so re-read
 Rovers start armed. `terra/rover/<id>/hardware/status` reports `armed`, and
 `terra/rover/<id>/safety` with `{"action":"stop","token":"stop-1"}` is an
 emergency stop that runs after every other command received in the same tick.
-The stop latches. On a real rover `{"action":"reset","token":"…"}` clears it once
-localization is healthy; the simulator currently rejects that reset because its
-pose estimator never reports ready, so restart the simulator instead. Holding
-Space in the simulator window also stops every remote-controlled rover.
+A stop needs no binding. It latches until a reset, which is bound like teleop:
+`{"action":"reset","token":"reset-1","run_id":"…","authority_revision":4}`.
+Terra rejects a reset while localization is unhealthy; `autonomy/status` reports
+`result` for the token. Holding Space in the simulator window also stops every
+remote-controlled rover.
 
 ## Topics
 
@@ -142,17 +145,31 @@ negative pitch heading in radians.
 
 One message on `terra/rover/<id>/goal` sets a goal; Terra does not need it
 repeated. The follower is Terra's `terra-waypoint` crate, the same one TerraPhone
-runs. A latched goal ignores teleop until `{"cancel":true}`. Holding Space zeros
-the wheels and leaves the goal latched.
+runs. Holding Space zeros the wheels and leaves the goal latched.
 
-The goal body is one of these objects and nothing else:
+A goal needs a waypoint autonomy level. Rovers start in `teleop`, so first
+request one on `terra/rover/<id>/autonomy`, bound like teleop:
 
 ```json
-{"frame":"local","x":12.0,"y":-4.0}
-{"frame":"local","x":12.0,"y":-4.0,"yaw":0.4,"token":"goal-1"}
-{"frame":"wgs84","latitude":38.8299,"longitude":-77.3075}
+{"level":"waypoint_direct","token":"level-1","run_id":"run-1792825168867262000","authority_revision":2}
+```
+
+`waypoint_direct` drives straight at the goal. `waypoint` routes with A* over
+cells the depth camera has observed, and holds with `route_no_path` while the
+way ahead is still unknown. Request `teleop` again to drive by hand.
+
+The goal body is one of these objects, plus the same `run_id` and
+`authority_revision`:
+
+```json
+{"frame":"local","x":-20.0,"y":5.0,"run_id":"…","authority_revision":3}
+{"frame":"local","x":-20.0,"y":5.0,"yaw":0.4,"token":"goal-1","run_id":"…","authority_revision":3}
+{"frame":"wgs84","latitude":38.83325,"longitude":-77.32321,"run_id":"…","authority_revision":3}
 {"cancel":true}
 ```
+
+A cancel needs no binding. Watch `result` for your token in `autonomy/status`:
+an unbound goal, or one sent in `teleop`, is `rejected`.
 
 `x` and `y` are metres in the same robotics frame as depth `body`: `x` is
 `-Bevy Z`, `y` is `-Bevy X`, and yaw 0 faces +x, toward the north goal. The
@@ -169,7 +186,7 @@ Terra publishes `terra/rover/<id>/goal/status` when the state changes and a few
 times a second while a goal is active:
 
 ```json
-{"state":"active","goal_id":4,"token":"goal-1","distance":6.2,"x":12.0,"y":-4.0,"yaw":0.4,"latitude":38.8299,"longitude":-77.3075}
+{"state":"active","goal_id":4,"token":"goal-1","distance":6.2,"x":-20.0,"y":5.0,"yaw":0.4}
 ```
 
 `state` is `idle`, `active`, or `arrived`. `goal_id` increases for each accepted

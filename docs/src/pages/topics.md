@@ -65,17 +65,31 @@ negative pitch heading in radians.
 
 One message on `terra/rover/<id>/goal` sets a goal; Terra does not need it
 repeated. The follower is Terra's `terra-waypoint` crate, the same one TerraPhone
-runs. A latched goal ignores teleop until `{"cancel":true}`. Holding Space zeros
-the wheels and leaves the goal latched.
+runs. Holding Space zeros the wheels and leaves the goal latched.
 
-The goal body is one of these objects and nothing else:
+A goal needs a waypoint autonomy level. Rovers start in `teleop`, so first
+request one on `terra/rover/<id>/autonomy`, bound like teleop:
 
 ```json
-{"frame":"local","x":12.0,"y":-4.0}
-{"frame":"local","x":12.0,"y":-4.0,"yaw":0.4,"token":"goal-1"}
-{"frame":"wgs84","latitude":38.8299,"longitude":-77.3075}
+{"level":"waypoint_direct","token":"level-1","run_id":"run-1792825168867262000","authority_revision":2}
+```
+
+`waypoint_direct` drives straight at the goal. `waypoint` routes with A* over
+cells the depth camera has observed, and holds with `route_no_path` while the
+way ahead is still unknown. Request `teleop` again to drive by hand.
+
+The goal body is one of these objects, plus the same `run_id` and
+`authority_revision`:
+
+```json
+{"frame":"local","x":-20.0,"y":5.0,"run_id":"…","authority_revision":3}
+{"frame":"local","x":-20.0,"y":5.0,"yaw":0.4,"token":"goal-1","run_id":"…","authority_revision":3}
+{"frame":"wgs84","latitude":38.83325,"longitude":-77.32321,"run_id":"…","authority_revision":3}
 {"cancel":true}
 ```
+
+A cancel needs no binding. Watch `result` for your token in `autonomy/status`:
+an unbound goal, or one sent in `teleop`, is `rejected`.
 
 `x` and `y` are metres in the same robotics frame as depth `body`: `x` is
 `-Bevy Z`, `y` is `-Bevy X`, and yaw 0 faces +x, toward the north goal. The
@@ -92,7 +106,7 @@ Terra publishes `terra/rover/<id>/goal/status` when the state changes and a few
 times a second while a goal is active:
 
 ```json
-{"state":"active","goal_id":4,"token":"goal-1","distance":6.2,"x":12.0,"y":-4.0,"yaw":0.4,"latitude":38.8299,"longitude":-77.3075}
+{"state":"active","goal_id":4,"token":"goal-1","distance":6.2,"x":-20.0,"y":5.0,"yaw":0.4}
 ```
 
 `state` is `idle`, `active`, or `arrived`. `goal_id` increases for each accepted

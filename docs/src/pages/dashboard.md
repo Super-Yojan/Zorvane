@@ -80,13 +80,41 @@ drive(0.0, 0.0)
 
 A command with a stale `run_id` or `revision` is ignored. Always read them from the latest `autonomy/status`, not from a copy you saved at startup.
 
-To stop the rover at once, publish an emergency stop. Use a new `token` each time:
+To stop the rover at once, publish an emergency stop. A stop needs no binding, so it works even when your copy of the status is stale. Use a new `token` each time:
 
 ```python
 session.put("terra/rover/0/safety", json.dumps({"action": "stop", "token": "stop-1"}))
 ```
 
-> ⚠ The stop latches: `autonomy/status` shows `"safety": "emergency_stop"` and teleop is ignored. On a real rover, `{"action": "reset", "token": "…"}` clears it once localization is healthy. The simulator currently rejects that reset, so restart the simulator to drive again. Keep the stop button for real emergencies.
+The stop latches: `autonomy/status` shows `"safety": "emergency_stop"` and teleop is ignored until a reset. A reset is bound like teleop, to the `run_id` and `revision` in the latest status:
+
+```python
+status = latest["0/autonomy/status"]
+session.put("terra/rover/0/safety", json.dumps({
+    "action": "reset",
+    "token": "reset-1",
+    "run_id": status["run_id"],
+    "authority_revision": status["revision"],
+}))
+```
+
+The reset is accepted when `autonomy/status` shows `"result": "accepted"` for your token and `"safety": "clear"`. Then drive with the new `revision`. Terra rejects a reset while the rover's localization is unhealthy.
+
+## Go to a point
+
+Rovers start in the `teleop` level. A goal needs a waypoint level, requested and sent with the same binding. `waypoint_direct` drives straight there:
+
+```python
+def bound(body):
+    status = latest["0/autonomy/status"]
+    return {**body, "run_id": status["run_id"], "authority_revision": status["revision"]}
+
+session.put("terra/rover/0/autonomy", json.dumps(bound({"level": "waypoint_direct", "token": "level-1"})))
+time.sleep(0.5)                  # the level change bumps the revision
+session.put("terra/rover/0/goal", json.dumps(bound({"frame": "local", "x": -40.0, "y": 0.0, "token": "goal-1"})))
+```
+
+`0/goal/status` reports `active`, then `arrived`. `{"cancel": true}` clears the goal. Request the `teleop` level again before driving by hand. Goals can also be latitude and longitude on Field 3; the [topic reference](/Zorvane/topics#go-to-waypoint) has every form.
 
 ## Load and dump
 

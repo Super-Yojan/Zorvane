@@ -131,10 +131,10 @@ decoding alone does not authorize motion; autonomy and safety state still apply.
 | `fleet/size` | `{"count":1}` |
 | `<id>/next/load`, `<id>/next/dump` | `{}` (the body is ignored) |
 | `<id>/teleop` | `{"linear":1.0,"angular":0.25,"run_id":"run-123","authority_revision":2,"operator_session_id":"operator-1","sequence":1}` |
-| `<id>/autonomy` | `{"level":"waypoint","token":"level-1"}` |
+| `<id>/autonomy` | `{"level":"waypoint_direct","token":"level-1","run_id":"run-123","authority_revision":2}` |
 | `<id>/safety` | `{"action":"stop","token":"stop-1"}` |
-| `<id>/goal` (local) | `{"frame":"local","x":5.0,"y":2.0,"yaw":0.0,"token":"goal-1"}` |
-| `<id>/goal` (geographic) | `{"frame":"wgs84","latitude":38.83,"longitude":-77.31,"token":"goal-2"}` |
+| `<id>/goal` (local) | `{"frame":"local","x":5.0,"y":2.0,"yaw":0.0,"token":"goal-1","run_id":"run-123","authority_revision":3}` |
+| `<id>/goal` (geographic) | `{"frame":"wgs84","latitude":38.83325,"longitude":-77.32321,"token":"goal-2","run_id":"run-123","authority_revision":3}` |
 | `<id>/goal` (cancel) | `{"cancel":true}` |
 | `<id>/goal/decision` | `{"run_id":"run-123","proposal_id":1,"decision":"approve","token":"decision-1"}` |
 | `<id>/search` | `{"version":1,"run_id":"run-123","search_id":"search-1","token":"start-1","target_class":"survivor","bounds":{"min_x":-10.0,"min_y":-10.0,"max_x":10.0,"max_y":10.0},"time_budget_s":300.0}` |
@@ -147,8 +147,12 @@ decoding alone does not authorize motion; autonomy and safety state still apply.
   `sequence` each time. Both velocities must be finite and within −5 through +5.
 - `autonomy.level`: `teleop`, `assisted_teleop`, `waypoint`, `waypoint_direct`,
   `supervised`, or `target_search`.
-- `safety.action`: `stop` or `reset`.
-- `goal`: `yaw` and `token` are optional. Yaw must be within ±2π. Geographic
+- `safety.action`: `stop` or `reset`. A stop needs no binding. A reset, like
+  every other non-neutral command (teleop with motion, autonomy levels, goals),
+  must carry the current `run_id` and `authority_revision`, or it is rejected
+  as `current_authority_required`.
+- `goal`: needs a waypoint level (`waypoint` or `waypoint_direct`); rovers start
+  in `teleop`. `yaw` and `token` are optional. Yaw must be within ±2π. Geographic
   latitude must be within ±85°, longitude within ±180°; geographic goals need
   a configured origin. Local goals must also fit the active world's bounds.
   Cancellation accepts only `{"cancel":true}`.

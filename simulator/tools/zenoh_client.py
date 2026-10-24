@@ -54,6 +54,49 @@ def encode_goal(args):
     return body
 
 
+def follow_authority(session, args):
+    """Track the rover's autonomy/status; return (status dict, subscriber).
+
+    Every non-neutral command is bound to its `run_id` and `revision`, so
+    read them from the latest status rather than a copy taken at startup.
+    """
+    status, ready = {}, threading.Event()
+
+    def receive(sample):
+        try:
+            value = json.loads(bytes(sample.payload))
+        except json.JSONDecodeError:
+            return
+        if isinstance(value, dict) and "run_id" in value and "revision" in value:
+            status.update(value)
+            ready.set()
+
+    subscriber = session.declare_subscriber(
+        f"{args.prefix}/{args.rover}/autonomy/status", receive)
+    if not ready.wait(3.0):
+        subscriber.undeclare()
+        raise SystemExit(f"rover {args.rover} published no autonomy/status")
+    return status, subscriber
+
+
+def bound(status, body):
+    """Add the current run and authority revision to a command body."""
+    return {**body, "run_id": status["run_id"], "authority_revision": status["revision"]}
+
+
+def select_level(session, args, status, level, accepted=()):
+    """Request an autonomy level, bound, unless it or one of `accepted` is active."""
+    if status.get("effective_level") in (level, *accepted):
+        return
+    session.put(f"{args.prefix}/{args.rover}/autonomy", json.dumps(
+        bound(status, {"level": level, "token": f"level-{time.time_ns()}"})))
+    deadline = time.monotonic() + 3
+    while status.get("effective_level") != level:
+        if time.monotonic() > deadline:
+            raise SystemExit(f"rover did not enter {level}: {status.get('reason')}")
+        time.sleep(0.05)
+
+
 def main():
     import zenoh
     parser = argparse.ArgumentParser(description=__doc__)
@@ -64,19 +107,21 @@ def main():
     frames = actions.add_parser("frames", help="Receive RGB and depth frames")
     frames.add_argument("--all", action="store_true", help="Receive every rover camera")
     frames.add_argument("--output", type=Path, help="Overwrite latest .npy frames and JSON metadata here")
-    drive = actions.add_parser("drive", help="Debug only: repeat a velocity command at 20 Hz")
+    drive = actions.add_parser("drive", help="Repeat a bound teleop command at 20 Hz")
     drive.add_argument("--linear", type=float, default=0.0, help="Forward speed in m/s")
     drive.add_argument("--angular", type=float, default=0.0, help="Left turn in rad/s")
     drive.add_argument("--seconds", type=float, default=5.0)
     goto = actions.add_parser("goto", help="Send one go-to-waypoint goal and print status")
-    goto.add_argument("--x", type=float, help="Local robotics x, metres north of the anchor")
-    goto.add_argument("--y", type=float, help="Local robotics y, metres west of the anchor")
+    goto.add_argument("--x", type=float, help="Field x in metres, toward the north goal")
+    goto.add_argument("--y", type=float, help="Field y in metres, toward the west touchline")
     goto.add_argument("--yaw", type=float, help="Optional final heading, radians, yaw 0 faces +x")
-    goto.add_argument("--lat", type=float, help="WGS84 latitude; requires a Terra tile anchor")
+    goto.add_argument("--lat", type=float, help="WGS84 latitude")
     goto.add_argument("--lon", type=float, help="WGS84 longitude")
     goto.add_argument("--token", help="Optional correlation token, echoed in goal/status")
     goto.add_argument("--cancel", action="store_true", help="Clear the latched goal")
     goto.add_argument("--timeout", type=float, default=45.0)
+    goto.add_argument("--level", choices=("waypoint_direct", "waypoint"), default="waypoint_direct",
+                      help="Autonomy level to select first, unless one is already active")
     fleet = actions.add_parser("fleet", help="List IDs or change the fleet size")
     fleet.add_argument("--count", type=int, help="Desired count, 0 through 32")
     args = parser.parse_args()
@@ -102,35 +147,18 @@ def main():
     config.insert_json5("scouting/multicast/enabled", "false")
     with zenoh.open(config) as session:
         if args.action == "drive":
-            # Teleop is bound to the rover's current run and authority
-            # revision, both read from autonomy/status.
             key = f"{args.prefix}/{args.rover}/teleop"
-            status, ready = {}, threading.Event()
-
-            def receive_authority(sample):
-                try:
-                    value = json.loads(bytes(sample.payload))
-                except json.JSONDecodeError:
-                    return
-                if isinstance(value, dict) and "run_id" in value and "revision" in value:
-                    status.update(value)
-                    ready.set()
-
-            subscriber = session.declare_subscriber(
-                f"{args.prefix}/{args.rover}/autonomy/status", receive_authority)
-            if not ready.wait(3.0):
-                subscriber.undeclare()
-                raise SystemExit(f"rover {args.rover} published no autonomy/status")
+            status, subscriber = follow_authority(session, args)
+            select_level(session, args, status, "teleop", ("assisted_teleop",))
             sequence = 0
 
             def teleop(linear, angular):
                 nonlocal sequence
                 sequence += 1
-                session.put(key, json.dumps({
+                session.put(key, json.dumps(bound(status, {
                     "linear": linear, "angular": angular,
-                    "run_id": status["run_id"], "authority_revision": status["revision"],
                     "operator_session_id": "zenoh-client", "sequence": sequence,
-                }))
+                })))
 
             deadline = time.monotonic() + args.seconds
             try:
@@ -156,10 +184,17 @@ def main():
                 event.set()
 
             subscriber = session.declare_subscriber(status_key, receive_status)
+            authority, authority_subscriber = follow_authority(session, args)
             try:
                 event.wait(0.3)
                 previous = seen.get("goal_id", 0) if isinstance(seen, dict) else 0
                 event.clear()
+                if not args.cancel:
+                    # Goals need a waypoint level. waypoint_direct drives
+                    # straight there; waypoint plans over observed cells only.
+                    select_level(session, args, authority, args.level,
+                                 ("waypoint", "waypoint_direct"))
+                    goal_payload = json.dumps(bound(authority, json.loads(goal_payload)))
                 session.put(goal_key, goal_payload)
                 deadline = time.monotonic() + args.timeout
                 while time.monotonic() < deadline:
@@ -177,6 +212,7 @@ def main():
                 raise SystemExit("No matching goal status before timeout")
             finally:
                 subscriber.undeclare()
+                authority_subscriber.undeclare()
         elif args.action == "fleet":
             event, state = threading.Event(), {}
             def receive_state(sample):
