@@ -1,5 +1,5 @@
 //! Phone-like IMU/VIO feedback into the portable controller, actuated through Avian forces.
-use crate::terra::{DriveCommand, DriveConfig, Odometry, Rover, WheelSpeeds};
+use crate::terra::{DriveCommand, DriveConfig, KeyboardControlled, Odometry, Rover, WheelSpeeds};
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use terra_control::{ControllerConfig, VelocityController};
@@ -61,6 +61,9 @@ impl Plugin for TerraVelocityControlPlugin {
 pub(crate) fn ideal_drive_enabled(config: Option<Res<VelocitySimulationConfig>>) -> bool {
     config.is_none_or(|config| !config.enabled)
 }
+pub(crate) fn keyboard_ideal_drive_enabled(config: Option<Res<VelocitySimulationConfig>>) -> bool {
+    config.is_some_and(|config| config.enabled)
+}
 #[derive(Component)]
 pub struct VelocityControlState {
     estimator: VelocityEstimator,
@@ -112,7 +115,6 @@ type ControlledRovers<'w, 's> = Query<
     's,
     (
         &'static DriveCommand,
-        Option<&'static crate::next_competition::RoverBallLoad>,
         Option<&'static AutonomyMotorGate>,
         &'static Rotation,
         &'static Position,
@@ -124,7 +126,7 @@ type ControlledRovers<'w, 's> = Query<
         &'static mut WheelSpeeds,
         &'static mut Odometry,
     ),
-    With<Rover>,
+    (With<Rover>, Without<KeyboardControlled>),
 >;
 fn control_and_apply(
     time: Res<Time<Fixed>>,
@@ -133,7 +135,7 @@ fn control_and_apply(
     mut rovers: ControlledRovers<'_, '_>,
 ) {
     if !config.enabled {
-        for (_, _, _, _, _, _, _, _, mut force, mut torque, _, _) in &mut rovers {
+        for (_, _, _, _, _, _, _, mut force, mut torque, _, _) in &mut rovers {
             force.0 = Vec3::ZERO;
             torque.0 = Vec3::ZERO;
         }
@@ -146,7 +148,6 @@ fn control_and_apply(
     }
     for (
         request,
-        load,
         gate,
         rotation,
         position,
@@ -193,17 +194,16 @@ fn control_and_apply(
             });
             brain.last_vio = Some(t);
         }
-        let waiting = load.is_some_and(|load| load.needs_operator());
-        if waiting || gate.is_some_and(|g| g.reset || g.hold) {
+        if gate.is_some_and(|g| g.reset || g.hold) {
             brain.controller.reset();
         }
         let _ = brain.controller.set_target(VelocityTarget {
             timestamp: t,
-            forward: if waiting { 0.0 } else { request.linear as f64 },
-            yaw_rate: if waiting { 0.0 } else { request.angular as f64 },
+            forward: request.linear as f64,
+            yaw_rate: request.angular as f64,
         });
         let estimate = brain.estimator.estimate(t);
-        let output = if waiting || gate.is_some_and(|g| g.hold) {
+        let output = if gate.is_some_and(|g| g.hold) {
             MotorOutput::stopped(StopReason::SensorNotReady)
         } else {
             brain.controller.step(estimate)
@@ -308,6 +308,108 @@ mod tests {
                 .with_y(0.0)
                 .length()
                 < 0.04
+        );
+
+        app.world_mut()
+            .entity_mut(rover)
+            .insert(crate::next_competition::RoverBallLoad {
+                collected: 0,
+                waiting: 2,
+                dumper: 1,
+            });
+        app.world_mut()
+            .get_mut::<DriveCommand>(rover)
+            .unwrap()
+            .linear = 1.0;
+        for _ in 0..500 {
+            app.update();
+        }
+        let world = app.world();
+        let rotation = world.get::<Rotation>(rover).unwrap().0;
+        let forward = world
+            .get::<LinearVelocity>(rover)
+            .unwrap()
+            .0
+            .dot(rotation * Vec3::NEG_Z);
+        assert!(forward > 0.8, "loaded dumper stopped the rover: {forward}");
+    }
+
+    #[test]
+    fn keyboard_teleop_tracks_straight_and_stops_without_reversing() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            TransformPlugin,
+            bevy::asset::AssetPlugin::default(),
+            bevy::mesh::MeshPlugin,
+            TerraPhysicsPlugin,
+            TerraVelocityControlPlugin,
+        ))
+        .insert_resource(DriveConfig::default())
+        .insert_resource(Time::<Fixed>::from_hz(100.0))
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(10),
+        ))
+        .add_systems(
+            FixedPostUpdate,
+            crate::terra::drive_keyboard
+                .after(PhysicsSystems::Prepare)
+                .before(PhysicsSystems::StepSimulation),
+        );
+        app.finish();
+        app.cleanup();
+        app.world_mut().spawn((
+            RigidBody::Static,
+            Collider::cuboid(100.0, 0.2, 100.0),
+            Transform::from_xyz(0.0, -0.1, 0.0),
+        ));
+        let rover = app
+            .world_mut()
+            .spawn((
+                Rover,
+                KeyboardControlled,
+                RoverBody::default(),
+                DriveCommand {
+                    linear: 1.0,
+                    angular: 0.0,
+                },
+                WheelSpeeds::default(),
+                Odometry::default(),
+                Transform::from_xyz(
+                    0.0,
+                    RoverPhysicsConfig::default().chassis_size.y * 0.5 + 0.02,
+                    0.0,
+                ),
+            ))
+            .id();
+        for _ in 0..3 {
+            app.update();
+        }
+        let first_speed = -app.world().get::<LinearVelocity>(rover).unwrap().z;
+        assert!(
+            first_speed > 0.0 && first_speed < 1.0,
+            "acceleration skipped: {first_speed}"
+        );
+        for _ in 0..200 {
+            app.update();
+        }
+        let moving = app.world().get::<Position>(rover).unwrap().0;
+        assert!(moving.z < -1.5, "rover did not drive forward: {moving:?}");
+        assert!(moving.x.abs() < 0.02, "rover drifted sideways: {moving:?}");
+
+        *app.world_mut().get_mut::<DriveCommand>(rover).unwrap() = DriveCommand::default();
+        for _ in 0..30 {
+            app.update();
+        }
+        let stopped = app.world().get::<Position>(rover).unwrap().0;
+        let velocity = app.world().get::<LinearVelocity>(rover).unwrap().0;
+        assert!(
+            velocity.x.abs() < 0.01 && velocity.z.abs() < 0.01,
+            "{velocity:?}"
+        );
+        assert!(
+            stopped.z < moving.z && stopped.z > moving.z - 0.15,
+            "unexpected stopping motion: {moving:?} -> {stopped:?}"
         );
     }
 }

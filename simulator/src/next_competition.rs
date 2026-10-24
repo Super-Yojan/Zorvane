@@ -51,6 +51,10 @@ pub const ROVER_BALL_CAPACITY: usize = 8;
 /// Maximum balls staged in the top-mounted dumper before a dump press.
 pub const DUMPER_CAPACITY: usize = 2;
 const DUMPER_BALL_LOCAL_Y: f32 = 0.32;
+/// Mouth of the top-mounted dumper, just beyond the front of the chassis.
+const DUMPER_OUTLET_CLEARANCE: f32 = 0.03;
+/// The outlet must be inside the bucket opening before DUMP is offered.
+const DUMP_ALIGNMENT_TOLERANCE: f32 = 0.09;
 
 /// 5-gallon bucket, from the user-supplied product diagram (inches × 0.0254).
 /// Open top. The diagram’s lid is not part of the model.
@@ -377,7 +381,7 @@ impl RoverBallLoad {
         self.waiting > 0 || self.dumper > 0
     }
     fn pickup(&mut self) -> bool {
-        if self.needs_operator() || self.count() >= ROVER_BALL_CAPACITY {
+        if self.count() >= ROVER_BALL_CAPACITY {
             return false;
         }
         self.collected += 1;
@@ -849,14 +853,6 @@ fn collect_crab_trap_balls(
 ) {
     let mut claimed = std::collections::HashSet::new();
     for (rover, position, rotation, mut carried) in &mut rovers {
-        if carried.needs_operator() {
-            for (_, parent, mut transform) in &mut flaps {
-                if parent.parent() == rover {
-                    transform.rotation = Quat::IDENTITY;
-                }
-            }
-            continue;
-        }
         let mut open = false;
         for (ball, ball_position, mesh, material) in &balls {
             let local = rotation.0.inverse() * (ball_position.0 - position.0);
@@ -920,7 +916,7 @@ fn sync_full_crab_traps(
     >,
 ) {
     for (rover, load, mut collider, closed) in &mut rovers {
-        let should_close = load.count() >= ROVER_BALL_CAPACITY || load.needs_operator();
+        let should_close = load.count() >= ROVER_BALL_CAPACITY;
         if should_close == closed.is_some() {
             continue;
         }
@@ -943,21 +939,47 @@ fn at_home_goal(slot: usize, position: Vec3, chassis: Vec3) -> bool {
     position.x.abs() <= GOAL_WIDTH * 0.5 - chassis.x * 0.5 && (position.z - goal_z).abs() <= 1.0
 }
 
+fn dumper_outlet(position: Vec3, rotation: Quat, chassis: Vec3) -> Vec3 {
+    position
+        + rotation
+            * Vec3::new(
+                0.0,
+                DUMPER_BALL_LOCAL_Y + 0.1,
+                -(chassis.z * 0.5 + BUCKET_TOP_DIAMETER * 0.5 + DUMPER_OUTLET_CLEARANCE),
+            )
+}
+
+fn aligned_bucket(position: Vec3, rotation: Quat, chassis: Vec3, bucket: &Bucket) -> bool {
+    let outlet = dumper_outlet(position, rotation, chassis);
+    let to_bucket = Vec2::new(bucket.center_x - position.x, bucket.center_z - position.z);
+    let forward = rotation * Vec3::NEG_Z;
+    let forward = Vec2::new(forward.x, forward.z);
+    forward.dot(to_bucket.normalize_or_zero()) > 0.9
+        && Vec2::new(outlet.x - bucket.center_x, outlet.z - bucket.center_z).length()
+            <= DUMP_ALIGNMENT_TOLERANCE
+}
+
+fn home_bucket_aligned(
+    slot: usize,
+    position: Vec3,
+    rotation: Quat,
+    chassis: Vec3,
+    buckets: &Query<&Bucket>,
+) -> bool {
+    buckets.iter().any(|bucket| {
+        (bucket.center_z >= 0.0) == (slot % 2 == 0)
+            && aligned_bucket(position, rotation, chassis, bucket)
+    })
+}
+
 fn queue_balls_at_goal(
     physics: Res<crate::physics::RoverPhysicsConfig>,
     mut rovers: Query<
-        (
-            &crate::terra::RoverSlot,
-            &Position,
-            &mut RoverBallLoad,
-            &mut crate::terra::DriveCommand,
-            &mut LinearVelocity,
-            &mut AngularVelocity,
-        ),
+        (&crate::terra::RoverSlot, &Position, &mut RoverBallLoad),
         With<crate::terra::Rover>,
     >,
 ) {
-    for (slot, position, mut load, mut drive, mut linear, mut angular) in &mut rovers {
+    for (slot, position, mut load) in &mut rovers {
         if load.collected == 0
             || load.needs_operator()
             || !at_home_goal(slot.0, position.0, physics.chassis_size)
@@ -965,10 +987,6 @@ fn queue_balls_at_goal(
             continue;
         }
         load.queue_at_goal();
-        *drive = crate::terra::DriveCommand::default();
-        linear.x = 0.0;
-        linear.z = 0.0;
-        angular.0 = Vec3::ZERO;
     }
 }
 
@@ -1014,9 +1032,8 @@ fn load_hud_clicks(
     mouse: Res<ButtonInput<MouseButton>>,
     config: Option<Res<crate::world::WorldConfig>>,
     session: Option<Res<crate::session::SimSession>>,
-    physics: Res<crate::physics::RoverPhysicsConfig>,
     buttons: Query<(&Interaction, &LoadRover), Changed<Interaction>>,
-    mut rovers: Query<(&crate::terra::RoverSlot, &Position, &mut RoverBallLoad)>,
+    mut rovers: Query<&mut RoverBallLoad>,
     carried_visuals: Query<
         (Entity, &ChildOf, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
         With<CarriedBall>,
@@ -1032,17 +1049,16 @@ fn load_hud_clicks(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        if let Ok((slot, position, mut load)) = rovers.get_mut(button.0) {
-            if at_home_goal(slot.0, position.0, physics.chassis_size) {
-                load_rover_once(button.0, &mut load, &carried_visuals, &mut commands);
-            }
+        if let Ok(mut load) = rovers.get_mut(button.0) {
+            load_rover_once(button.0, &mut load, &carried_visuals, &mut commands);
         }
     }
 }
 
 fn dump_rover_once(
     rover: Entity,
-    slot: usize,
+    outlet: Vec3,
+    rotation: Quat,
     load: &mut RoverBallLoad,
     dumper_visuals: &Query<(Entity, &ChildOf), With<DumperBall>>,
     mesh: &Handle<Mesh>,
@@ -1058,8 +1074,11 @@ fn dump_rover_once(
             commands.entity(ball).despawn();
         }
     }
-    let target = goal_bucket_place(slot % 2 == 0);
+    let right = rotation * Vec3::X;
     for index in 0..count {
+        let release = outlet
+            + right * ((index as f32 - (count - 1) as f32 * 0.5) * 0.05)
+            + Vec3::Y * (index as f32 * 0.08);
         commands.spawn((
             Name::new("Dumped tennis ball"),
             NextField,
@@ -1075,11 +1094,7 @@ fn dump_rover_once(
             SweptCcd::default(),
             Mesh3d(mesh.clone()),
             MeshMaterial3d(material.clone()),
-            Transform::from_xyz(
-                target.x + (index as f32 - (count - 1) as f32 * 0.5) * 0.05,
-                BUCKET_BODY_HEIGHT + 0.14 + index as f32 * 0.08,
-                target.z,
-            ),
+            Transform::from_translation(release),
         ));
     }
 }
@@ -1090,7 +1105,13 @@ fn dump_hud_clicks(
     session: Option<Res<crate::session::SimSession>>,
     physics: Res<crate::physics::RoverPhysicsConfig>,
     buttons: Query<(&Interaction, &DumpRover), Changed<Interaction>>,
-    mut rovers: Query<(&crate::terra::RoverSlot, &Position, &mut RoverBallLoad)>,
+    mut rovers: Query<(
+        &crate::terra::RoverSlot,
+        &Position,
+        &Rotation,
+        &mut RoverBallLoad,
+    )>,
+    buckets: Query<&Bucket>,
     dumper_visuals: Query<(Entity, &ChildOf), With<DumperBall>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -1106,8 +1127,16 @@ fn dump_hud_clicks(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        if let Ok((slot, position, mut load)) = rovers.get_mut(button.0) {
-            if !at_home_goal(slot.0, position.0, physics.chassis_size) || load.dumper == 0 {
+        if let Ok((slot, position, rotation, mut load)) = rovers.get_mut(button.0) {
+            if load.dumper == 0
+                || !home_bucket_aligned(
+                    slot.0,
+                    position.0,
+                    rotation.0,
+                    physics.chassis_size,
+                    &buckets,
+                )
+            {
                 continue;
             }
             let (mesh, material) = ball_assets.get_or_insert_with(|| {
@@ -1118,7 +1147,8 @@ fn dump_hud_clicks(
             });
             dump_rover_once(
                 button.0,
-                slot.0,
+                dumper_outlet(position.0, rotation.0, physics.chassis_size),
+                rotation.0,
                 &mut load,
                 &dumper_visuals,
                 mesh,
@@ -1207,10 +1237,8 @@ fn load_world_clicks(
         }
     }
     if let Some((rover, _)) = nearest {
-        if let Ok((_, slot, position, _, mut load)) = rovers.get_mut(rover) {
-            if at_home_goal(slot.0, position.0, physics.chassis_size) {
-                load_rover_once(rover, &mut load, &carried_visuals, &mut commands);
-            }
+        if let Ok((_, _, _, _, mut load)) = rovers.get_mut(rover) {
+            load_rover_once(rover, &mut load, &carried_visuals, &mut commands);
         }
     }
 }
@@ -1260,7 +1288,7 @@ fn sync_waiting_markers(
 #[derive(Default, PartialEq, Eq)]
 struct HudSnapshot {
     score: usize,
-    rows: Vec<(Entity, u64, usize, usize, usize)>,
+    rows: Vec<(Entity, u64, usize, usize, usize, bool)>,
 }
 
 fn update_score_hud(
@@ -1268,7 +1296,19 @@ fn update_score_hud(
     config: Option<Res<crate::world::WorldConfig>>,
     session: Option<Res<crate::session::SimSession>>,
     score: Res<NextTeamScore>,
-    rovers: Query<(Entity, &crate::terra::RoverId, &RoverBallLoad), With<crate::terra::Rover>>,
+    physics: Res<crate::physics::RoverPhysicsConfig>,
+    rovers: Query<
+        (
+            Entity,
+            &crate::terra::RoverId,
+            &crate::terra::RoverSlot,
+            &Position,
+            &Rotation,
+            &RoverBallLoad,
+        ),
+        With<crate::terra::Rover>,
+    >,
+    buckets: Query<&Bucket>,
     roots: Query<Entity, With<NextHud>>,
     mut previous: Local<Option<HudSnapshot>>,
 ) {
@@ -1281,7 +1321,23 @@ fn update_score_hud(
     }
     let mut rows: Vec<_> = rovers
         .iter()
-        .map(|(entity, id, load)| (entity, id.0, load.collected, load.waiting, load.dumper))
+        .map(|(entity, id, slot, position, rotation, load)| {
+            (
+                entity,
+                id.0,
+                load.collected,
+                load.waiting,
+                load.dumper,
+                load.dumper > 0
+                    && home_bucket_aligned(
+                        slot.0,
+                        position.0,
+                        rotation.0,
+                        physics.chassis_size,
+                        &buckets,
+                    ),
+            )
+        })
         .collect();
     rows.sort_by_key(|row| row.1);
     let snapshot = HudSnapshot {
@@ -1324,7 +1380,7 @@ fn update_score_hud(
                 },
                 TextColor(Color::WHITE),
             ));
-            for (rover, id, collected, waiting, dumper) in &snapshot.rows {
+            for (rover, id, collected, waiting, dumper, can_dump) in &snapshot.rows {
                 let load = RoverBallLoad {
                     collected: *collected,
                     waiting: *waiting,
@@ -1391,7 +1447,7 @@ fn update_score_hud(
                                 ));
                             });
                         }
-                        if *dumper > 0 {
+                        if *can_dump {
                             row.spawn((
                                 Button,
                                 DumpRover(*rover),
@@ -1411,6 +1467,15 @@ fn update_score_hud(
                                     },
                                 ));
                             });
+                        } else if *dumper > 0 {
+                            row.spawn((
+                                Text::new("Drive to and face a bucket to dump"),
+                                TextColor(Color::WHITE),
+                                TextFont {
+                                    font_size: bevy::text::FontSize::Px(13.0),
+                                    ..default()
+                                },
+                            ));
                         }
                     });
             }
@@ -1532,7 +1597,6 @@ mod tests {
         first.queue_at_goal();
         assert_eq!(first.state_label(), "WAITING FOR OPERATOR");
         assert_eq!((first.collected, first.waiting, first.dumper), (0, 3, 0));
-        assert!(!first.pickup()); // A waiting rover cannot collect another ball.
         for _ in 0..DUMPER_CAPACITY {
             assert!(first.load_dumper());
         }
@@ -1603,7 +1667,55 @@ mod tests {
     }
 
     #[test]
-    fn eighth_pickup_closes_flaps_and_front_collider_until_scoring_finishes() {
+    fn rover_with_loaded_dumper_keeps_collecting_until_total_capacity() {
+        let physics = RoverPhysicsConfig::from_body(&zorvane_vehicle::CrabTrapBot).unwrap();
+        let mut app = App::new();
+        app.insert_resource(physics.clone()).add_systems(
+            FixedUpdate,
+            (collect_crab_trap_balls, sync_full_crab_traps).chain(),
+        );
+        let rover = app
+            .world_mut()
+            .spawn((
+                CrabTrapIntake,
+                Position(Vec3::new(0.0, 0.32, 0.0)),
+                Rotation::default(),
+                RoverBallLoad {
+                    collected: ROVER_BALL_CAPACITY - 4,
+                    waiting: 1,
+                    dumper: 1,
+                },
+                RoverBody::crab_trap_collider(physics.chassis_size, false),
+            ))
+            .id();
+        let spawn_ball = |app: &mut App| {
+            app.world_mut()
+                .spawn((
+                    TennisBall,
+                    Position(Vec3::new(0.0, TENNIS_BALL_RADIUS, -0.25)),
+                    Mesh3d(Handle::<Mesh>::default()),
+                    MeshMaterial3d(Handle::<StandardMaterial>::default()),
+                ))
+                .id()
+        };
+        let first = spawn_ball(&mut app);
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(app.world().get_entity(first).is_err());
+        assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().count(), 7);
+        assert!(app.world().get::<TrapFrontClosed>(rover).is_none());
+
+        let eighth = spawn_ball(&mut app);
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(app.world().get_entity(eighth).is_err());
+        assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().count(), 8);
+        assert!(app.world().get::<TrapFrontClosed>(rover).is_some());
+        let excess = spawn_ball(&mut app);
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(app.world().get_entity(excess).is_ok());
+    }
+
+    #[test]
+    fn eighth_pickup_closes_flaps_and_front_reopens_when_space_returns() {
         let physics = RoverPhysicsConfig::from_body(&zorvane_vehicle::CrabTrapBot).unwrap();
         let mut app = App::new();
         app.insert_resource(physics.clone()).add_systems(
@@ -1667,7 +1779,7 @@ mod tests {
         assert!(load.load_dumper());
         assert_eq!(load.dump(), 1);
         app.world_mut().run_schedule(FixedUpdate);
-        assert!(app.world().get::<TrapFrontClosed>(rover).is_some());
+        assert!(app.world().get::<TrapFrontClosed>(rover).is_none());
         for _ in 1..ROVER_BALL_CAPACITY {
             let mut load = app.world_mut().get_mut::<RoverBallLoad>(rover).unwrap();
             assert!(load.load_dumper());
@@ -1705,7 +1817,7 @@ mod tests {
             .world_mut()
             .spawn((
                 crate::terra::RoverSlot(0),
-                Position(Vec3::new(0.0, 0.32, PITCH_SOUTH - 0.5)),
+                Position(Vec3::new(0.0, 0.32, PITCH_SOUTH - 2.0)),
                 RoverBallLoad {
                     collected: 0,
                     waiting: 2,
@@ -1744,6 +1856,36 @@ mod tests {
     }
 
     #[test]
+    fn dumping_requires_the_outlet_over_a_bucket_and_facing_it() {
+        let chassis = RoverPhysicsConfig::default().chassis_size;
+        let bucket = goal_bucket_place(true).volume();
+        let aligned = Vec3::new(
+            bucket.center_x,
+            chassis.y * 0.5,
+            bucket.center_z + chassis.z * 0.5 + BUCKET_TOP_DIAMETER * 0.5 + DUMPER_OUTLET_CLEARANCE,
+        );
+        assert!(aligned_bucket(aligned, Quat::IDENTITY, chassis, &bucket));
+        assert!(!aligned_bucket(
+            aligned + Vec3::X * 0.2,
+            Quat::IDENTITY,
+            chassis,
+            &bucket
+        ));
+        assert!(!aligned_bucket(
+            aligned + Vec3::Z * 1.0,
+            Quat::IDENTITY,
+            chassis,
+            &bucket
+        ));
+        assert!(!aligned_bucket(
+            aligned,
+            Quat::from_rotation_y(std::f32::consts::PI),
+            chassis,
+            &bucket
+        ));
+    }
+
+    #[test]
     fn dump_button_releases_full_dumper_without_scoring_early() {
         let mut app = physics_app();
         app.insert_resource(WorldConfig::for_choice(crate::session::WorldChoice::Next))
@@ -1763,7 +1905,8 @@ mod tests {
             .world_mut()
             .spawn((
                 crate::terra::RoverSlot(0),
-                Position(Vec3::new(0.0, 0.32, PITCH_SOUTH - 0.5)),
+                Position(Vec3::new(0.0, 0.32, PITCH_SOUTH - 0.45)),
+                Rotation(Quat::IDENTITY),
                 RoverBallLoad {
                     collected: 0,
                     waiting: 0,
@@ -1806,7 +1949,7 @@ mod tests {
     }
 
     #[test]
-    fn arrival_at_own_goal_queues_balls_and_stops_the_rover() {
+    fn arrival_at_own_goal_queues_balls_without_stopping_the_rover() {
         let mut app = App::new();
         app.insert_resource(RoverPhysicsConfig::default())
             .add_systems(FixedUpdate, queue_balls_at_goal);
@@ -1831,8 +1974,8 @@ mod tests {
             .id();
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().waiting, 2);
-        assert_eq!(app.world().get::<DriveCommand>(rover).unwrap().linear, 0.0);
-        assert_eq!(app.world().get::<LinearVelocity>(rover).unwrap().z, 0.0);
+        assert_eq!(app.world().get::<DriveCommand>(rover).unwrap().linear, 1.0);
+        assert_eq!(app.world().get::<LinearVelocity>(rover).unwrap().z, -1.0);
         assert!(at_home_goal(
             1,
             Vec3::new(0.0, 0.0, PITCH_NORTH + 0.5),

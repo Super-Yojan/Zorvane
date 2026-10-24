@@ -8,7 +8,38 @@ pub struct TerraPhysicsPlugin;
 impl Plugin for TerraPhysicsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RoverPhysicsConfig>()
-            .add_plugins(PhysicsPlugins::default());
+            .add_plugins(PhysicsPlugins::default())
+            .add_systems(
+                FixedPostUpdate,
+                keep_rovers_upright
+                    .after(PhysicsSystems::StepSimulation)
+                    .before(PhysicsSystems::Writeback),
+            );
+    }
+}
+
+fn level_heading(rotation: Quat) -> Quat {
+    let forward = rotation * Vec3::NEG_Z;
+    let yaw = if forward.x * forward.x + forward.z * forward.z > 1e-8 {
+        (-forward.x).atan2(-forward.z)
+    } else {
+        let right = rotation * Vec3::X;
+        (-right.z).atan2(right.x)
+    };
+    Quat::from_rotation_y(yaw)
+}
+
+/// Locked axes prevent new roll and pitch, but do not remove any tilt already
+/// present in the body's orientation after contact or transform synchronization.
+fn keep_rovers_upright(
+    mut rovers: Query<(&mut Rotation, &mut AngularVelocity), With<crate::terra::Rover>>,
+) {
+    for (mut rotation, mut angular) in &mut rovers {
+        angular.x = 0.0;
+        angular.z = 0.0;
+        if (rotation.0 * Vec3::Y).dot(Vec3::Y) < 0.9999 {
+            rotation.0 = level_heading(rotation.0);
+        }
     }
 }
 
@@ -283,6 +314,33 @@ mod tests {
         let rest_y = RoverPhysicsConfig::default().chassis_size.y * 0.5;
         assert!((position.y - rest_y).abs() < 0.03, "{position:?}");
         assert!(app.world().get::<LinearVelocity>(entity).unwrap().y.abs() < 0.1);
+    }
+
+    #[test]
+    fn tipped_rover_levels_without_losing_heading_or_gravity() {
+        let mut app = simulation();
+        let tipped =
+            Quat::from_rotation_y(0.7) * Quat::from_rotation_x(0.35) * Quat::from_rotation_z(-0.25);
+        let expected_forward = (tipped * Vec3::NEG_Z).with_y(0.0).normalize();
+        let entity = app
+            .world_mut()
+            .spawn((
+                Rover,
+                RoverBody::default(),
+                Transform::from_xyz(0.0, 2.0, 0.0).with_rotation(tipped),
+            ))
+            .id();
+        tick(&mut app, 2);
+        let rotation = app.world().get::<Rotation>(entity).unwrap().0;
+        assert!(
+            (rotation * Vec3::Y).dot(Vec3::Y) > 0.9999,
+            "rotation after correction: {rotation:?}"
+        );
+        assert!((rotation * Vec3::NEG_Z).dot(expected_forward) > 0.9999);
+        tick(&mut app, 180);
+        let position = app.world().get::<Position>(entity).unwrap().0;
+        let rest_y = RoverPhysicsConfig::default().chassis_size.y * 0.5;
+        assert!((position.y - rest_y).abs() < 0.03, "{position:?}");
     }
 
     #[test]

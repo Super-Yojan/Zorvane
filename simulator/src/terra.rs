@@ -24,8 +24,10 @@ impl Plugin for TerraPlugin {
             )
             .add_systems(
                 FixedPostUpdate,
-                drive
-                    .run_if(crate::velocity_controller::ideal_drive_enabled)
+                (
+                    drive.run_if(crate::velocity_controller::ideal_drive_enabled),
+                    drive_keyboard.run_if(crate::velocity_controller::keyboard_ideal_drive_enabled),
+                )
                     .after(PhysicsSystems::Prepare)
                     .before(PhysicsSystems::StepSimulation),
             );
@@ -114,7 +116,22 @@ pub struct Rover;
 
 /// Remove this marker to control DriveCommand from another system.
 #[derive(Component)]
+#[require(KeyboardMotion)]
 pub struct KeyboardControlled;
+
+#[derive(Component, Default)]
+pub(crate) struct KeyboardMotion {
+    linear: f32,
+    angular: f32,
+}
+
+// Full keyboard speed is reached in about 0.4 s; releasing the key stops in
+// about 0.2 s. Keeping this separate from physics velocity avoids feeding
+// contact impulses back into the requested drive speed.
+const KEYBOARD_LINEAR_ACCEL: f32 = 4.0;
+const KEYBOARD_LINEAR_BRAKE: f32 = 7.5;
+const KEYBOARD_YAW_ACCEL: f32 = 4.0;
+const KEYBOARD_YAW_BRAKE: f32 = 7.5;
 
 /// Body velocity request: forward m/s and left-turn rad/s. Zero means stop.
 #[derive(Component, Default, Clone, Copy)]
@@ -361,7 +378,6 @@ type RoverDriveQuery<'w, 's> = Query<
     's,
     (
         &'static DriveCommand,
-        Option<&'static crate::next_competition::RoverBallLoad>,
         &'static mut WheelSpeeds,
         &'static mut Odometry,
         &'static Rotation,
@@ -371,25 +387,112 @@ type RoverDriveQuery<'w, 's> = Query<
     With<Rover>,
 >;
 
+type KeyboardDriveQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static DriveCommand,
+        &'static mut WheelSpeeds,
+        &'static mut Odometry,
+        &'static Rotation,
+        &'static mut LinearVelocity,
+        &'static mut AngularVelocity,
+        &'static mut KeyboardMotion,
+    ),
+    (With<Rover>, With<KeyboardControlled>),
+>;
+
+fn apply_ideal_drive(
+    time: &Time<Fixed>,
+    config: &DriveConfig,
+    command: &DriveCommand,
+    wheels: &mut WheelSpeeds,
+    pose: &mut Odometry,
+    rotation: &Rotation,
+    linear: &mut LinearVelocity,
+    angular: &mut AngularVelocity,
+) {
+    *wheels = config.wheels(*command);
+    let (v, w) = if config.validate().is_ok() {
+        config.twist(*wheels)
+    } else {
+        (0.0, 0.0)
+    };
+    pose.integrate(v, w, time.delta_secs());
+    let forward = (rotation.0 * Vec3::NEG_Z).with_y(0.0).normalize_or_zero();
+    // Leave vertical velocity to gravity and the contact solver.
+    linear.x = forward.x * v;
+    linear.z = forward.z * v;
+    angular.0 = Vec3::Y * w;
+}
+
 pub(crate) fn drive(time: Res<Time<Fixed>>, config: Res<DriveConfig>, mut rovers: RoverDriveQuery) {
-    for (command, load, mut wheels, mut pose, rotation, mut linear, mut angular) in &mut rovers {
-        let command = if load.is_some_and(|load| load.needs_operator()) {
-            DriveCommand::default()
+    for (command, mut wheels, mut pose, rotation, mut linear, mut angular) in &mut rovers {
+        apply_ideal_drive(
+            &time,
+            &config,
+            command,
+            &mut wheels,
+            &mut pose,
+            rotation,
+            &mut linear,
+            &mut angular,
+        );
+    }
+}
+
+pub(crate) fn drive_keyboard(
+    time: Res<Time<Fixed>>,
+    config: Res<DriveConfig>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    mut rovers: KeyboardDriveQuery,
+) {
+    let dt = time.delta_secs();
+    for (command, mut wheels, mut pose, rotation, mut linear, mut angular, mut motion) in
+        &mut rovers
+    {
+        let target = config.twist(config.wheels(*command));
+        let stop = keys
+            .as_ref()
+            .is_some_and(|keys| keys.pressed(KeyCode::Space));
+        if stop {
+            motion.linear = 0.0;
+            motion.angular = 0.0;
         } else {
-            *command
-        };
-        *wheels = config.wheels(command);
-        let (v, w) = if config.validate().is_ok() {
-            config.twist(*wheels)
-        } else {
-            (0.0, 0.0)
-        };
-        pose.integrate(v, w, time.delta_secs());
-        let forward = (rotation.0 * Vec3::NEG_Z).with_y(0.0).normalize_or_zero();
-        // Leave vertical velocity to gravity and the contact solver.
-        linear.x = forward.x * v;
-        linear.z = forward.z * v;
-        angular.0 = Vec3::Y * w;
+            let linear_rate = if target.0 == 0.0 {
+                KEYBOARD_LINEAR_BRAKE
+            } else {
+                KEYBOARD_LINEAR_ACCEL
+            };
+            let angular_rate = if target.1 == 0.0 {
+                KEYBOARD_YAW_BRAKE
+            } else {
+                KEYBOARD_YAW_ACCEL
+            };
+            motion.linear = approach(motion.linear, target.0, linear_rate * dt);
+            motion.angular = approach(motion.angular, target.1, angular_rate * dt);
+        }
+        apply_ideal_drive(
+            &time,
+            &config,
+            &DriveCommand {
+                linear: motion.linear,
+                angular: motion.angular,
+            },
+            &mut wheels,
+            &mut pose,
+            rotation,
+            &mut linear,
+            &mut angular,
+        );
+    }
+}
+
+fn approach(current: f32, target: f32, maximum_change: f32) -> f32 {
+    if current < target {
+        (current + maximum_change).min(target)
+    } else {
+        (current - maximum_change).max(target)
     }
 }
 
@@ -400,7 +503,7 @@ mod tests {
         assert!((a - b).abs() < 1e-5, "{a} != {b}");
     }
     #[test]
-    fn controller_preserves_gravity_and_does_not_teleport() {
+    fn controller_drives_waiting_rover_without_losing_gravity_or_teleporting() {
         let mut app = App::new();
         let mut time = Time::<Fixed>::default();
         time.advance_by(std::time::Duration::from_secs(1));
@@ -413,6 +516,11 @@ mod tests {
             .spawn((
                 Rover,
                 KeyboardControlled,
+                crate::next_competition::RoverBallLoad {
+                    collected: 0,
+                    waiting: 2,
+                    dumper: 0,
+                },
                 DriveCommand::default(),
                 WheelSpeeds::default(),
                 Odometry::default(),
