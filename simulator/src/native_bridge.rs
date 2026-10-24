@@ -169,6 +169,7 @@ fn publish_loop(
     local: Option<zenoh::Session>,
     fleet: Option<&FleetState>,
 ) -> zenoh::Result<()> {
+    shared.connection_generation.fetch_add(1, Ordering::Release);
     shared.connected.store(true, Ordering::Release);
     let mut occupancy_baselines = BTreeMap::<u64, OccupancyBaseline>::new();
     let mut noted_partial = false;

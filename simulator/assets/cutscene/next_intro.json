@@ -28,9 +28,9 @@
     {
       "shot": "balls",
       "caption": "99 tennis balls in each penalty box",
-      "narration": "Ninety-nine tennis balls start in each penalty box. Collect them, and launch them into your buckets.",
+      "narration": "Ninety-nine tennis balls start in each penalty box. Collect them, then dump or launch them into your buckets.",
       "audio": "audio/next_intro_4.ogg",
-      "seconds": 6.3
+      "seconds": 6.75
     },
     {
       "shot": "orange_bucket",
@@ -62,10 +62,10 @@
     },
     {
       "shot": "rover",
-      "caption": "W A S D to drive, Space to stop",
-      "narration": "You drive CrabTrapBot for the Red Alliance. Use W, A, S and D to drive, and Space to stop. Good luck.",
+      "caption": "Collect, load at your goal, dump into orange",
+      "narration": "You drive CrabTrapBot for the Red Alliance. Collect balls, load them at your goal, then park against an orange bucket and dump. W, A, S and D drive, and Space stops.",
       "audio": "audio/next_intro_9.ogg",
-      "seconds": 7.95
+      "seconds": 11.51
     }
   ]
 }

@@ -8,7 +8,38 @@ pub struct TerraPhysicsPlugin;
 impl Plugin for TerraPhysicsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RoverPhysicsConfig>()
-            .add_plugins(PhysicsPlugins::default());
+            .add_plugins(PhysicsPlugins::default())
+            .add_systems(
+                FixedPostUpdate,
+                keep_rovers_upright
+                    .after(PhysicsSystems::StepSimulation)
+                    .before(PhysicsSystems::Writeback),
+            );
+    }
+}
+
+fn level_heading(rotation: Quat) -> Quat {
+    let forward = rotation * Vec3::NEG_Z;
+    let yaw = if forward.x * forward.x + forward.z * forward.z > 1e-8 {
+        (-forward.x).atan2(-forward.z)
+    } else {
+        let right = rotation * Vec3::X;
+        (-right.z).atan2(right.x)
+    };
+    Quat::from_rotation_y(yaw)
+}
+
+/// Locked axes prevent new roll and pitch, but do not remove any tilt already
+/// present in the body's orientation after contact or transform synchronization.
+fn keep_rovers_upright(
+    mut rovers: Query<(&mut Rotation, &mut AngularVelocity), With<crate::terra::Rover>>,
+) {
+    for (mut rotation, mut angular) in &mut rovers {
+        angular.x = 0.0;
+        angular.z = 0.0;
+        if (rotation.0 * Vec3::Y).dot(Vec3::Y) < 0.9999 {
+            rotation.0 = level_heading(rotation.0);
+        }
     }
 }
 
@@ -98,9 +129,19 @@ impl RoverBody {
     /// Open-front chassis frame for the CrabTrapBot intake. Balls can roll
     /// between the rails; the rear crossbar still blocks them physically.
     pub fn with_front_intake(mut self, size: Vec3) -> Self {
+        self.collider = Self::crab_trap_collider(size, false);
+        self
+    }
+
+    /// The fourth wall closes the intake once the rover is full.
+    pub(crate) fn crab_trap_collider(size: Vec3, closed: bool) -> Collider {
         let rail = 0.055;
-        let back = 0.065;
-        self.collider = Collider::compound(vec![
+        let bar = 0.065;
+        // A high front crossbar blocks buckets while ground-level balls still
+        // pass under it into the intake.
+        let bucket_guard_height = 0.10;
+        let bucket_guard_y = -size.y * 0.5 + 0.22;
+        let mut parts = vec![
             (
                 Position::from_xyz(-(size.x - rail) * 0.5, 0.0, 0.0),
                 Rotation::default(),
@@ -112,12 +153,24 @@ impl RoverBody {
                 Collider::cuboid(rail, size.y, size.z),
             ),
             (
-                Position::from_xyz(0.0, 0.0, (size.z - back) * 0.5),
+                Position::from_xyz(0.0, 0.0, (size.z - bar) * 0.5),
                 Rotation::default(),
-                Collider::cuboid(size.x, size.y, back),
+                Collider::cuboid(size.x, size.y, bar),
             ),
-        ]);
-        self
+            (
+                Position::from_xyz(0.0, bucket_guard_y, -(size.z - bar) * 0.5),
+                Rotation::default(),
+                Collider::cuboid(size.x, bucket_guard_height, bar),
+            ),
+        ];
+        if closed {
+            parts.push((
+                Position::from_xyz(0.0, 0.0, -(size.z - bar) * 0.5),
+                Rotation::default(),
+                Collider::cuboid(size.x, size.y, bar),
+            ));
+        }
+        Collider::compound(parts)
     }
 }
 
@@ -238,6 +291,21 @@ mod tests {
     }
 
     #[test]
+    fn crab_trap_front_blocks_buckets_but_leaves_low_ball_opening() {
+        let size = RoverPhysicsConfig::from_body(&zorvane_vehicle::CrabTrapBot)
+            .unwrap()
+            .chassis_size;
+        let open = RoverBody::crab_trap_collider(size, false);
+        let closed = RoverBody::crab_trap_collider(size, true);
+        let front_z = -(size.z - 0.065) * 0.5;
+        let bucket_height_point = Vec3::new(0.0, -size.y * 0.5 + 0.22, front_z);
+        let ball_height_point = Vec3::new(0.0, -size.y * 0.5 + 0.04, front_z);
+        assert!(open.contains_point(Vec3::ZERO, Quat::IDENTITY, bucket_height_point));
+        assert!(!open.contains_point(Vec3::ZERO, Quat::IDENTITY, ball_height_point));
+        assert!(closed.contains_point(Vec3::ZERO, Quat::IDENTITY, ball_height_point));
+    }
+
+    #[test]
     fn gravity_settles_rover_on_ground() {
         let mut app = simulation();
         let entity = rover(&mut app, DriveCommand::default());
@@ -246,6 +314,33 @@ mod tests {
         let rest_y = RoverPhysicsConfig::default().chassis_size.y * 0.5;
         assert!((position.y - rest_y).abs() < 0.03, "{position:?}");
         assert!(app.world().get::<LinearVelocity>(entity).unwrap().y.abs() < 0.1);
+    }
+
+    #[test]
+    fn tipped_rover_levels_without_losing_heading_or_gravity() {
+        let mut app = simulation();
+        let tipped =
+            Quat::from_rotation_y(0.7) * Quat::from_rotation_x(0.35) * Quat::from_rotation_z(-0.25);
+        let expected_forward = (tipped * Vec3::NEG_Z).with_y(0.0).normalize();
+        let entity = app
+            .world_mut()
+            .spawn((
+                Rover,
+                RoverBody::default(),
+                Transform::from_xyz(0.0, 2.0, 0.0).with_rotation(tipped),
+            ))
+            .id();
+        tick(&mut app, 2);
+        let rotation = app.world().get::<Rotation>(entity).unwrap().0;
+        assert!(
+            (rotation * Vec3::Y).dot(Vec3::Y) > 0.9999,
+            "rotation after correction: {rotation:?}"
+        );
+        assert!((rotation * Vec3::NEG_Z).dot(expected_forward) > 0.9999);
+        tick(&mut app, 180);
+        let position = app.world().get::<Position>(entity).unwrap().0;
+        let rest_y = RoverPhysicsConfig::default().chassis_size.y * 0.5;
+        assert!((position.y - rest_y).abs() < 0.03, "{position:?}");
     }
 
     #[test]

@@ -3,8 +3,9 @@
 **TL;DR.** NEXT is Zorvane's default world: the NEXT Competition 2026 field on
 Field 3, West Campus, George Mason University, with no Google data. CrabTrapBot
 is rover 0 for the Red Alliance. 99 tennis balls in each penalty box, ten orange
-and ten blue buckets, some on 1 m stands. A narrated cutscene explains the rules.
-The simulator does not referee: scoring, tags and penalties are not enforced.
+and ten blue buckets, some on 1 m stands. CrabTrapBot collects balls and dumps
+them into its alliance's ground-level buckets, scored by rules 4. A narrated
+cutscene explains the rules. Launching, tags and penalties are not modeled.
 
 ![NEXT pitch](../docs/assets/next.png)
 
@@ -18,7 +19,8 @@ The layout follows the *NEXT Competition 2026 Rules* (August 7, 2026):
 | 2.2 Each alliance's Base is a 20 × 10 ft canopy tent | Red Base behind the south end line, Blue Base behind the north, west of each goal |
 | 3.1 99 balls in each penalty box | 99 per box, seeded spread, clear of the goal area so rovers start clear |
 | 3.2 10 orange and 10 blue 5-gallon buckets, ground level or 1 m | Orange (Red's targets) in the north half, blue (Blue's) in the south half; 4 per half on grey 1 m stands (the mix is a sim choice) |
-| 4 Scoring, 4.3 out-of-bounds, 4.4 tagging, 5.6 knocked buckets | Explained in the cutscene, not enforced |
+| 4 Scoring | Dumps into your alliance's ground buckets score 1 or 2 points, shown as Red and Blue in the HUD; launching is not modeled |
+| 4.3 out-of-bounds, 4.4 tagging, 5.6 knocked buckets | Explained in the cutscene, not enforced |
 
 Rover 0 starts on the south goal line facing north; further rovers split across
 the two goal lines. A ball dropped through an open bucket top is pulled toward
@@ -68,11 +70,33 @@ TERRA_HEADLESS=1 TERRA_ZENOH=0 ZORVANE_SMOKE=1 cargo run -p zorvane
 | `TERRA_NEXT_CAMERA=overview` | Spectator view over the west touchline instead of following rover 0. |
 | `TERRA_NEXT_SEED` | Bucket layout seed (default 42). |
 
-CrabTrapBot has an open-front collision frame. A ball entering the low, central
-intake is moved into a visible holding area inside the rover, and the two flap
-visuals swing inward as it passes. This is a one-way collection approximation:
-launching, release into buckets, and the panels' real contact and hinge torque
-are not modeled.
+CrabTrapBot has an open-front collision frame. A ball entering the low intake,
+including the space behind either flap, is moved into a visible holding area
+inside the rover. It holds up to eight balls; at capacity the flaps stay shut
+and a front bar closes the chassis, so further balls stay on the field. An upper
+front guard keeps buckets outside the rover while balls still pass below it.
+
+### Loading and dumping
+
+Each rover shows its onboard count and state in the upper-right panel:
+**SEARCHING**, **CARRYING BALLS**, **FULL: RETURN TO GOAL** or **WAITING FOR
+OPERATOR**, under the Red and Blue scores.
+
+1. Drive back to the goal you started on (even slots south, odd slots north).
+   Within 1 m of the goal line, collected balls become *waiting*; the rover keeps
+   driving.
+2. Click **LOAD 1 INTO DUMPER**, or the rover in the 3D view, to move one waiting
+   ball into the top dumper. It holds `DUMPER_CAPACITY` (2) balls, about 0.6 m up.
+3. Drive into the opposing half and park against one of your alliance's
+   ground-level buckets: Red dumps into orange, Blue into blue (rules 3.2b).
+   **DUMP** appears once the outlet is over the bucket opening.
+4. Click **DUMP**. The balls fall for real; a ball scores only when it lands in
+   the bucket: 1 point, or 2 within 30 m of the opponent's Base (rules 4).
+
+A dump from a robot parked against a bucket counts. Raised buckets are out of
+dump reach: their rims, at about 1.34 m, are above the dumper, so they need a
+launcher (3 or 6 points). The dump chute is idealized, and the STEP model's panel
+geometry, hinge torque and ball contact with the panels are not modeled.
 
 Startup prints a `Terra NEXT:` line with the ball and bucket counts.
 
@@ -149,7 +173,7 @@ TERRA_NEXT_GMU=1 TERRA_ZENOH=0 cargo run -p zorvane --bin zorvane --features gmu
 **F6** switches between stadium overview and rover follow. **W/A/S/D** drives;
 **Space** stops. **Escape** opens the pause menu, where Restart and Load world
 rebuild the competition and detach old scenery. The preset starts in overview.
-The existing NEXT scene has no automatic scoring or competition referee.
+The NEXT score advances only through operator clicks at a rover's home goal; there is no automatic competition referee.
 
 ### Visual scenery and robot data
 
