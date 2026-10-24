@@ -316,7 +316,13 @@ impl Plugin for SimulatorBridgePlugin {
                 ),
             )
             .add_systems(FixedUpdate, drive_autonomy)
-            .add_systems(Update, publish_frames);
+            .add_systems(Update, (publish_frames, forward_next_commands, publish_next_state));
+        if !app
+            .world()
+            .contains_resource::<Messages<crate::next_competition::NextCommand>>()
+        {
+            app.add_message::<crate::next_competition::NextCommand>();
+        }
     }
 }
 #[derive(Default)]
@@ -329,6 +335,8 @@ struct Outgoing {
     occupancy_heartbeats: std::collections::BTreeSet<u64>,
     reports: BTreeMap<u64, Vec<Vec<u8>>>,
     poses: BTreeMap<u64, Vec<u8>>,
+    /// `<prefix>/next/score`, when a NEXT match is running.
+    next_score: Option<Vec<u8>>,
 }
 struct OccupancyPublication {
     payload: Vec<u8>,
@@ -384,6 +392,8 @@ struct Shared {
     epoch: std::sync::atomic::AtomicU64,
     connection_generation: std::sync::atomic::AtomicU64,
     fleet_request: Mutex<Option<usize>>,
+    /// Dashboard LOAD and DUMP requests, by rover id.
+    next_commands: Mutex<Vec<crate::next_competition::NextCommand>>,
     outgoing: Mutex<Outgoing>,
     connected: AtomicBool,
     stop: AtomicBool,
@@ -411,6 +421,13 @@ impl Shared {
             return;
         };
         if !self.commands.lock().unwrap().contains_key(&id) {
+            return;
+        }
+        if let Some(kind) = crate::next_competition::NextCommandKind::from_topic(kind) {
+            self.next_commands
+                .lock()
+                .unwrap()
+                .push(crate::next_competition::NextCommand { rover: id, kind });
             return;
         }
         if matches!(
@@ -471,6 +488,50 @@ impl Drop for Bridge {
 }
 #[derive(Component)]
 struct ZenohControlled;
+
+/// Hands dashboard LOAD and DUMP requests to the NEXT game.
+fn forward_next_commands(
+    bridge: Res<Bridge>,
+    mut writer: MessageWriter<crate::next_competition::NextCommand>,
+) {
+    for command in std::mem::take(&mut *bridge.shared.next_commands.lock().unwrap()) {
+        writer.write(command);
+    }
+}
+
+/// Publishes each rover's NEXT state and the score, five times a second.
+fn publish_next_state(
+    bridge: Res<Bridge>,
+    time: Res<Time>,
+    mut last: Local<f64>,
+    config: Option<Res<crate::world::WorldConfig>>,
+    score: Option<Res<crate::next_competition::NextTeamScore>>,
+    rovers: Query<(
+        &RoverId,
+        &crate::terra::RoverSlot,
+        &crate::next_competition::RoverBallLoad,
+        Option<&crate::next_competition::DumpReady>,
+    )>,
+) {
+    let now = time.elapsed_secs_f64();
+    if now - *last < 0.2
+        || config.is_none_or(|config| config.scene != crate::world::SceneKind::Next)
+    {
+        return;
+    }
+    *last = now;
+    let mut outgoing = bridge.shared.outgoing.lock().unwrap();
+    for (id, slot, load, ready) in &rovers {
+        let status = crate::next_competition::status_json(slot.0, *load, ready.is_some_and(|r| r.0));
+        outgoing
+            .states
+            .insert((id.0, "next/status".into()), serde_json::to_vec(&status).unwrap());
+    }
+    if let Some(score) = score {
+        let score = crate::next_competition::score_json(*score);
+        outgoing.next_score = Some(serde_json::to_vec(&score).unwrap());
+    }
+}
 fn receive_fleet_request(bridge: Res<Bridge>, fleet: Option<ResMut<RoverFleet>>) {
     if let Some(count) = bridge.shared.fleet_request.lock().unwrap().take()
         && let Some(mut fleet) = fleet
@@ -1111,6 +1172,26 @@ mod tests {
             .validate()
             .is_ok()
         );
+    }
+
+    #[test]
+    fn next_load_and_dump_reach_the_game_as_typed_commands() {
+        use crate::next_competition::{NextCommand, NextCommandKind};
+        let shared = Shared::default();
+        shared.commands.lock().unwrap().insert(0, None);
+        shared.receive("terra/rover", "terra/rover/0/next/load", b"{}");
+        shared.receive("terra/rover", "terra/rover/0/next/dump", b"{}");
+        // Unknown rovers and other NEXT-looking keys are ignored.
+        shared.receive("terra/rover", "terra/rover/9/next/dump", b"{}");
+        shared.receive("terra/rover", "terra/rover/0/next/launch", b"{}");
+        assert_eq!(
+            *shared.next_commands.lock().unwrap(),
+            vec![
+                NextCommand { rover: 0, kind: NextCommandKind::Load },
+                NextCommand { rover: 0, kind: NextCommandKind::Dump },
+            ]
+        );
+        assert!(shared.actions.lock().unwrap().is_empty());
     }
 
     #[test]

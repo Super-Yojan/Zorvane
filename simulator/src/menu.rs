@@ -62,6 +62,11 @@ struct UiCamera;
 struct MenuRoot;
 #[derive(Component)]
 struct PickWorld(WorldChoice);
+
+/// Worlds the menu offers. Only the NEXT competition for the packaged release;
+/// the elevation map and Google scenery stay in code, reachable with
+/// `TERRA_TILES=1` and `TERRA_NEXT_GMU=1`.
+const MENU_WORLDS: &[WorldChoice] = &[WorldChoice::Next];
 #[derive(Component)]
 struct StartButton;
 #[derive(Component)]
@@ -260,12 +265,7 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool) {
                         label(panel, &session.note, 15.0, Color::srgb(0.95, 0.72, 0.45));
                     }
                     label(panel, "World", 14.0, Color::srgb(0.62, 0.68, 0.70));
-                    for choice in [
-                        WorldChoice::Next,
-                        WorldChoice::Tiles,
-                        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-                        WorldChoice::Gmu,
-                    ] {
+                    for &choice in MENU_WORLDS {
                         button(
                             panel,
                             choice.label(),
@@ -385,62 +385,36 @@ mod tests {
     }
 
     #[test]
-    fn gmu_uses_start_pause_resume_restart_and_world_selection() {
+    fn menu_offers_only_next_and_runs_start_pause_resume_restart() {
         let mut app = App::new();
-        app.insert_resource(SimSession::at_menu(WorldChoice::Town, 1))
-            .insert_resource(crate::world::WorldConfig::for_choice(WorldChoice::Gmu))
+        app.insert_resource(SimSession::at_menu(WorldChoice::Next, 1))
+            .insert_resource(crate::world::WorldConfig::for_choice(WorldChoice::Next))
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Time<Virtual>>()
-            .add_plugins(MenuPlugin)
-            .add_systems(Update, crate::gmu::switch_view.after(clicks));
+            .add_plugins(MenuPlugin);
         app.update();
         let world = app.world_mut();
-        let gmu = world
-            .query::<(Entity, &PickWorld)>()
+        let offered: Vec<_> = world
+            .query::<&PickWorld>()
             .iter(world)
-            .find(|(_, p)| p.0 == WorldChoice::Gmu)
-            .unwrap()
-            .0;
-        *world.get_mut::<Interaction>(gmu).unwrap() = Interaction::Pressed;
-        app.update();
-        assert_eq!(app.world().resource::<SimSession>().world, WorldChoice::Gmu);
-        let world = app.world_mut();
-        assert_eq!(world.query::<&GmuStatus>().iter(world).count(), 1);
+            .map(|pick| pick.0)
+            .collect();
+        assert_eq!(offered, vec![WorldChoice::Next]);
         press::<StartButton>(&mut app);
         assert_eq!(app.world().resource::<SimSession>().phase, Phase::Playing);
         assert!(app.world().contains_resource::<RebuildWorld>());
         app.world_mut().remove_resource::<RebuildWorld>();
         press::<PauseButton>(&mut app);
         assert_eq!(app.world().resource::<SimSession>().phase, Phase::Paused);
-        press::<GmuViewButton>(&mut app);
-        assert!(
-            app.world()
-                .resource::<crate::world::WorldConfig>()
-                .follow_rover
-        );
+        let world = app.world_mut();
+        let offered = world.query::<&PickWorld>().iter(world).count();
+        assert_eq!(offered, 1, "the pause menu offers the same single world");
         press::<ResumeButton>(&mut app);
         assert_eq!(app.world().resource::<SimSession>().phase, Phase::Playing);
         assert!(!app.world().contains_resource::<RebuildWorld>());
         press::<PauseButton>(&mut app);
         press::<RestartButton>(&mut app);
         assert!(app.world().contains_resource::<RebuildWorld>());
-        app.world_mut().remove_resource::<RebuildWorld>();
-        press::<PauseButton>(&mut app);
-        let world = app.world_mut();
-        let next = world
-            .query::<(Entity, &PickWorld)>()
-            .iter(world)
-            .find(|(_, p)| p.0 == WorldChoice::Tiles)
-            .unwrap()
-            .0;
-        *world.get_mut::<Interaction>(next).unwrap() = Interaction::Pressed;
-        app.update();
-        press::<LoadButton>(&mut app);
-        assert_eq!(
-            app.world().resource::<SimSession>().world,
-            WorldChoice::Tiles
-        );
-        assert_eq!(app.world().resource::<SimSession>().phase, Phase::Playing);
-        assert!(app.world().contains_resource::<RebuildWorld>());
+        assert_eq!(app.world().resource::<SimSession>().world, WorldChoice::Next);
     }
 }

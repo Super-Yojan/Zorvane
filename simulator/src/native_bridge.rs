@@ -203,6 +203,16 @@ fn publish_loop(
                 &mut noted_partial,
             )?;
         }
+        if let Some(score) = outgoing.next_score {
+            publish_each(
+                &sessions,
+                format!("{}/next/score", config.prefix),
+                score,
+                zenoh::bytes::Encoding::APPLICATION_JSON,
+                Some(zenoh::qos::CongestionControl::Drop),
+                &mut noted_partial,
+            )?;
+        }
         let live: std::collections::BTreeSet<u64> =
             shared.commands.lock().unwrap().keys().copied().collect();
         occupancy_baselines.retain(|id, _| live.contains(id));

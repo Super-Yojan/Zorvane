@@ -47,8 +47,22 @@ fn asset_root() -> String {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        concat!(env!("CARGO_MANIFEST_DIR"), "/assets").into()
+        packaged_assets()
+            .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/assets").into())
     }
+}
+
+/// A packaged build carries its assets: beside the executable in the Windows
+/// and Linux zips, or in `Contents/Resources` of the macOS app bundle.
+#[cfg(not(target_arch = "wasm32"))]
+fn packaged_assets() -> Option<String> {
+    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+    let dir = exe.parent()?;
+    [dir.join("assets"), dir.join("../Resources/assets")]
+        .into_iter()
+        .find(|path| path.join("cutscene/next_intro.json").is_file())
+        .and_then(|path| path.canonicalize().ok())
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 fn main() {

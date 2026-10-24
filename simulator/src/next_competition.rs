@@ -102,12 +102,14 @@ pub fn install(app: &mut App) {
         .get_resource::<crate::session::SimSession>()
         .is_some_and(|session| session.phase == crate::session::Phase::Menu);
     app.init_resource::<NextTeamScore>()
-        .add_systems(Update, (name_zatara, setup_crab_traps))
+        .add_message::<NextCommand>()
+        .add_systems(Update, (name_zatara, setup_crab_traps, track_dump_ready))
         .add_systems(
             Update,
             (
                 load_hud_clicks,
                 dump_hud_clicks,
+                apply_next_commands,
                 load_world_clicks,
                 sync_waiting_markers,
                 update_score_hud,
@@ -446,7 +448,7 @@ impl RoverBallLoad {
         self.collected += 1;
         true
     }
-    fn state_label(self) -> &'static str {
+    pub fn state_label(self) -> &'static str {
         if self.needs_operator() {
             "WAITING FOR OPERATOR"
         } else if self.count() >= ROVER_BALL_CAPACITY {
@@ -1410,6 +1412,202 @@ fn dump_rover_once(
     }
 }
 
+/// Operator LOAD and DUMP from outside the simulator, such as a dashboard on
+/// Zenoh. They go through the same checks as the HUD buttons.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NextCommand {
+    pub rover: u64,
+    pub kind: NextCommandKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NextCommandKind {
+    Load,
+    Dump,
+}
+
+impl NextCommandKind {
+    /// The per-rover topic suffix a dashboard publishes to.
+    pub fn from_topic(kind: &str) -> Option<Self> {
+        match kind {
+            "next/load" => Some(Self::Load),
+            "next/dump" => Some(Self::Dump),
+            _ => None,
+        }
+    }
+}
+
+/// Whether DUMP would release balls right now: the dumper holds balls and its
+/// outlet is over one of the rover's alliance buckets at ground level.
+#[derive(Component, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DumpReady(pub bool);
+
+impl Alliance {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Red => "red",
+            Self::Blue => "blue",
+        }
+    }
+}
+
+impl BucketSide {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Orange => "orange",
+            Self::Blue => "blue",
+        }
+    }
+}
+
+/// `<prefix>/<id>/next/status`: one rover's NEXT state for dashboards.
+pub fn status_json(slot: usize, load: RoverBallLoad, dump_ready: bool) -> serde_json::Value {
+    let alliance = Alliance::of_slot(slot);
+    serde_json::json!({
+        "schema_version": 1,
+        "alliance": alliance.name(),
+        "target_bucket": alliance.target().name(),
+        "state": load.state_label(),
+        "collected": load.collected,
+        "waiting": load.waiting,
+        "dumper": load.dumper,
+        "capacity": ROVER_BALL_CAPACITY,
+        "dumper_capacity": DUMPER_CAPACITY,
+        "can_load": load.waiting > 0 && load.dumper < DUMPER_CAPACITY,
+        "can_dump": dump_ready,
+    })
+}
+
+/// `<prefix>/next/score`: points per alliance (rules 4).
+pub fn score_json(score: NextTeamScore) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "red": score.red,
+        "blue": score.blue,
+    })
+}
+
+fn track_dump_ready(
+    mut commands: Commands,
+    physics: Res<crate::physics::RoverPhysicsConfig>,
+    rovers: Query<(
+        Entity,
+        &crate::terra::RoverSlot,
+        &Position,
+        &Rotation,
+        &RoverBallLoad,
+        Option<&DumpReady>,
+    )>,
+    buckets: Query<(&Bucket, &BucketSide)>,
+) {
+    for (rover, slot, position, rotation, load, previous) in &rovers {
+        let ready = load.dumper > 0
+            && target_bucket_aligned(slot.0, position.0, rotation.0, physics.chassis_size, &buckets);
+        if previous.map(|ready| ready.0) != Some(ready) {
+            commands.entity(rover).insert(DumpReady(ready));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_next_commands(
+    mut requests: MessageReader<NextCommand>,
+    config: Option<Res<crate::world::WorldConfig>>,
+    session: Option<Res<crate::session::SimSession>>,
+    physics: Res<crate::physics::RoverPhysicsConfig>,
+    mut rovers: Query<(
+        Entity,
+        &crate::terra::RoverId,
+        &crate::terra::RoverSlot,
+        &Position,
+        &Rotation,
+        &mut RoverBallLoad,
+    )>,
+    buckets: Query<(&Bucket, &BucketSide)>,
+    carried_visuals: Query<
+        (Entity, &ChildOf, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
+        With<CarriedBall>,
+    >,
+    dumper_visuals: Query<(Entity, &ChildOf), With<DumperBall>>,
+    field_balls: Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>), With<TennisBall>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut ball_assets: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
+    mut commands: Commands,
+) {
+    if !operator_active(config.as_deref(), session.as_deref()) {
+        requests.clear();
+        return;
+    }
+    for request in requests.read() {
+        let Some((rover, _, slot, position, rotation, mut load)) = rovers
+            .iter_mut()
+            .find(|(_, id, ..)| id.0 == request.rover)
+        else {
+            continue;
+        };
+        match request.kind {
+            NextCommandKind::Load => {
+                load_rover_once(rover, &mut load, &carried_visuals, &mut commands);
+            }
+            NextCommandKind::Dump => {
+                if load.dumper == 0
+                    || !target_bucket_aligned(
+                        slot.0,
+                        position.0,
+                        rotation.0,
+                        physics.chassis_size,
+                        &buckets,
+                    )
+                {
+                    continue;
+                }
+                let (mesh, material) =
+                    dump_ball_assets(&mut ball_assets, &field_balls, &mut meshes, &mut materials);
+                dump_rover_once(
+                    rover,
+                    Alliance::of_slot(slot.0),
+                    dumper_outlet(position.0, rotation.0, physics.chassis_size),
+                    rotation.0,
+                    &mut load,
+                    &dumper_visuals,
+                    &mesh,
+                    &material,
+                    &mut commands,
+                );
+            }
+        }
+    }
+}
+
+/// Dumped balls reuse the field balls' mesh and felt, so they look the same
+/// to cameras and detectors.
+fn dump_ball_assets(
+    cache: &mut Option<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    field_balls: &Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>), With<TennisBall>>,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) -> (Handle<Mesh>, Handle<StandardMaterial>) {
+    cache
+        .get_or_insert_with(|| {
+            field_balls
+                .iter()
+                .next()
+                .map(|(mesh, material)| (mesh.0.clone(), material.0.clone()))
+                .unwrap_or_else(|| {
+                    (
+                        meshes.add(Sphere::new(TENNIS_BALL_RADIUS).mesh().uv(32, 18)),
+                        materials.add(StandardMaterial {
+                            base_color: BALL_FELT,
+                            perceptual_roughness: 0.95,
+                            ..default()
+                        }),
+                    )
+                })
+        })
+        .clone()
+}
+
 fn dump_hud_clicks(
     mouse: Res<ButtonInput<MouseButton>>,
     config: Option<Res<crate::world::WorldConfig>>,
@@ -1451,24 +1649,8 @@ fn dump_hud_clicks(
             {
                 continue;
             }
-            // Dumped balls reuse the field balls' mesh and felt, so they look
-            // the same to cameras and detectors.
-            let (mesh, material) = ball_assets.get_or_insert_with(|| {
-                field_balls
-                    .iter()
-                    .next()
-                    .map(|(mesh, material)| (mesh.0.clone(), material.0.clone()))
-                    .unwrap_or_else(|| {
-                        (
-                            meshes.add(Sphere::new(TENNIS_BALL_RADIUS).mesh().uv(32, 18)),
-                            materials.add(StandardMaterial {
-                                base_color: BALL_FELT,
-                                perceptual_roughness: 0.95,
-                                ..default()
-                            }),
-                        )
-                    })
-            });
+            let (mesh, material) =
+                dump_ball_assets(&mut ball_assets, &field_balls, &mut meshes, &mut materials);
             dump_rover_once(
                 button.0,
                 Alliance::of_slot(slot.0),
@@ -1476,8 +1658,8 @@ fn dump_hud_clicks(
                 rotation.0,
                 &mut load,
                 &dumper_visuals,
-                mesh,
-                material,
+                &mesh,
+                &material,
                 &mut commands,
             );
         }
@@ -2289,6 +2471,61 @@ mod tests {
                 blue: 0
             }
         );
+    }
+
+    #[test]
+    fn dashboard_dump_command_scores_like_the_hud_button() {
+        let mut app = physics_app();
+        app.insert_resource(WorldConfig::for_choice(crate::session::WorldChoice::Next))
+            .insert_resource(NextTeamScore::default())
+            .insert_resource(Assets::<Mesh>::default())
+            .insert_resource(Assets::<StandardMaterial>::default())
+            .add_message::<NextCommand>()
+            .add_systems(Update, apply_next_commands);
+        let target = BucketPlace::open(0.0, -10.0);
+        app.world_mut().spawn((
+            target.volume(),
+            BucketSide::Orange,
+            RigidBody::Static,
+            bucket_collider(),
+            Transform::from_xyz(target.x, 0.0, target.z),
+        ));
+        let chassis = RoverPhysicsConfig::default().chassis_size;
+        let rover = app
+            .world_mut()
+            .spawn((
+                crate::terra::RoverId(4),
+                crate::terra::RoverSlot(0),
+                Position(Vec3::new(
+                    0.0,
+                    0.32,
+                    target.z + chassis.z * 0.5 + BUCKET_TOP_DIAMETER * 0.5 + DUMPER_OUTLET_CLEARANCE,
+                )),
+                Rotation(Quat::IDENTITY),
+                RoverBallLoad {
+                    collected: 0,
+                    waiting: 1,
+                    dumper: 1,
+                },
+            ))
+            .id();
+        // Another rover's id does nothing; this one's LOAD then DUMP.
+        for (id, kind) in [
+            (5, NextCommandKind::Dump),
+            (4, NextCommandKind::Load),
+            (4, NextCommandKind::Dump),
+        ] {
+            app.world_mut().write_message(NextCommand { rover: id, kind });
+        }
+        app.update();
+        let load = *app.world().get::<RoverBallLoad>(rover).unwrap();
+        assert_eq!((load.waiting, load.dumper), (0, 0));
+        tick(&mut app, 180);
+        assert_eq!(app.world().resource::<NextTeamScore>().red, 2);
+        let status = status_json(0, load, false);
+        assert_eq!(status["alliance"], "red");
+        assert_eq!(status["target_bucket"], "orange");
+        assert_eq!(status["capacity"], ROVER_BALL_CAPACITY);
     }
 
     #[test]
