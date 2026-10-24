@@ -1,14 +1,9 @@
 //! Exposure-aligned depth evidence and honestly labelled receipt-only RGB captures.
-#[cfg(feature = "native")]
 use std::sync::{OnceLock, RwLock};
-#[cfg(feature = "native")]
 use terra_observability::{AttachmentInput, EventInput, EvidenceBundle, EvidenceWriter};
-#[cfg(feature = "native")]
 static WRITER: OnceLock<Option<EvidenceWriter>> = OnceLock::new();
-#[cfg(feature = "native")]
 static SESSION: OnceLock<RwLock<String>> = OnceLock::new();
 pub fn initialize() {
-    #[cfg(feature = "native")]
     {
         WRITER.get_or_init(|| {
             let journal = terra_observability::runtime_journal()?;
@@ -23,7 +18,6 @@ pub fn initialize() {
     }
 }
 pub fn set_session(run: &str) {
-    #[cfg(feature = "native")]
     {
         if let Ok(mut s) = SESSION
             .get_or_init(|| RwLock::new(String::new()))
@@ -32,16 +26,12 @@ pub fn set_session(run: &str) {
             *s = run.into();
         }
     }
-    #[cfg(not(feature = "native"))]
-    let _ = run;
 }
-#[cfg(feature = "native")]
 fn session() -> Option<String> {
     SESSION
         .get()
         .and_then(|s| s.try_read().ok().map(|s| s.clone()))
 }
-#[cfg(feature = "native")]
 pub fn capture_depth(
     rover: u64,
     frame: &crate::depth_camera::DepthFrame,
@@ -104,16 +94,6 @@ pub fn capture_depth(
         attachments,
     });
 }
-#[cfg(not(feature = "native"))]
-pub fn capture_depth(
-    _: u64,
-    _: &crate::depth_camera::DepthFrame,
-    _: &terra_mapping::CameraIntrinsics,
-    _: &terra_runtime::mapping::MappingState,
-    _: &terra_mapping::MapConfig,
-) {
-}
-#[cfg(feature = "native")]
 pub fn capture_rgb(rover: u64, frame: &crate::rgb_camera::RgbFrame) {
     let Some(Some(writer)) = WRITER.get() else {
         return;
@@ -139,10 +119,7 @@ pub fn capture_rgb(rover: u64, frame: &crate::rgb_camera::RgbFrame) {
         }],
     });
 }
-#[cfg(not(feature = "native"))]
-pub fn capture_rgb(_: u64, _: &crate::rgb_camera::RgbFrame) {}
 
-#[cfg(feature = "native")]
 fn capture_map(rover: u64, time: f64, revision: u64, map: &terra_runtime::mapping::MappingState) {
     use std::sync::Mutex;
     static LAST_MAP: OnceLock<Mutex<std::collections::BTreeMap<u64, f64>>> = OnceLock::new();
@@ -180,12 +157,5 @@ fn capture_map(rover: u64, time: f64, revision: u64, map: &terra_runtime::mappin
     });
 }
 pub fn evidence_period() -> f64 {
-    #[cfg(feature = "native")]
-    {
-        terra_observability::runtime_settings().evidence_sample_seconds
-    }
-    #[cfg(not(feature = "native"))]
-    {
-        1.0
-    }
+    terra_observability::runtime_settings().evidence_sample_seconds
 }

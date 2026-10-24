@@ -2,13 +2,11 @@
 
 **TL;DR.** One depth sensor per rover. 256×192. 60° vertical. Range 0.05–30 m. Bright preview means near.
 
-![Depth camera mount](../docs/assets/camera.svg)
+![Depth camera mount](../docs/public/media/camera.svg)
 
 *Just ahead of the chassis, looking along local −Z.*
 
-![Town, with the depth preview at the lower right](../docs/assets/town.png)
-
-*Windowed town. The lower-right square is the depth preview for rover 0.*
+The lower-right square of the window is the depth preview for rover 0.
 
 `TerraDepthCameraPlugin` is registered in `main.rs`. It mounts one sensor on each new rover. The mount is in metres and ignores GLB scale.
 

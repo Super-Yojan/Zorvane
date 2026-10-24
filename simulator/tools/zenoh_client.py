@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Receive Terra camera frames or send a repeated differential-drive twist."""
+"""Receive Terra camera frames, drive with bound teleop, or send a waypoint goal."""
 import argparse
 import json
 import math
@@ -102,17 +102,46 @@ def main():
     config.insert_json5("scouting/multicast/enabled", "false")
     with zenoh.open(config) as session:
         if args.action == "drive":
-            key = f"{args.prefix}/{args.rover}/cmd_vel"
-            payload = json.dumps({"linear": args.linear, "angular": args.angular})
+            # Teleop is bound to the rover's current run and authority
+            # revision, both read from autonomy/status.
+            key = f"{args.prefix}/{args.rover}/teleop"
+            status, ready = {}, threading.Event()
+
+            def receive_authority(sample):
+                try:
+                    value = json.loads(bytes(sample.payload))
+                except json.JSONDecodeError:
+                    return
+                if isinstance(value, dict) and "run_id" in value and "revision" in value:
+                    status.update(value)
+                    ready.set()
+
+            subscriber = session.declare_subscriber(
+                f"{args.prefix}/{args.rover}/autonomy/status", receive_authority)
+            if not ready.wait(3.0):
+                subscriber.undeclare()
+                raise SystemExit(f"rover {args.rover} published no autonomy/status")
+            sequence = 0
+
+            def teleop(linear, angular):
+                nonlocal sequence
+                sequence += 1
+                session.put(key, json.dumps({
+                    "linear": linear, "angular": angular,
+                    "run_id": status["run_id"], "authority_revision": status["revision"],
+                    "operator_session_id": "zenoh-client", "sequence": sequence,
+                }))
+
             deadline = time.monotonic() + args.seconds
             try:
                 while time.monotonic() < deadline:
-                    session.put(key, payload)
+                    teleop(args.linear, args.angular)
                     time.sleep(0.05)
             except KeyboardInterrupt:
                 pass
             finally:
-                session.put(key, json.dumps({"linear": 0.0, "angular": 0.0}))
+                teleop(0.0, 0.0)
+                subscriber.undeclare()
         elif args.action == "goto":
             status_key = f"{args.prefix}/{args.rover}/goal/status"
             goal_key = f"{args.prefix}/{args.rover}/goal"

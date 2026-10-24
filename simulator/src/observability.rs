@@ -1,6 +1,5 @@
-//! Native durable operational evidence; browser builds retain their existing telemetry.
+//! Durable operational evidence for each control tick.
 use serde_json::Value;
-#[cfg(feature = "native")]
 use terra_observability::EventInput;
 pub struct Projector {
     last: std::collections::BTreeMap<String, (f64, String)>,
@@ -15,17 +14,9 @@ impl Default for Projector {
     }
 }
 fn default_period() -> f64 {
-    #[cfg(feature = "native")]
-    {
-        terra_observability::runtime_settings().control_sample_seconds
-    }
-    #[cfg(not(feature = "native"))]
-    {
-        0.1
-    }
+    terra_observability::runtime_settings().control_sample_seconds
 }
 impl Projector {
-    #[cfg(feature = "native")]
     pub fn project(&mut self, value: Value) -> Vec<EventInput> {
         let rover = value["rover_id"].as_u64().unwrap_or(0).to_string();
         let time = value["time"].as_f64().unwrap_or(0.);
@@ -68,11 +59,9 @@ impl Projector {
     }
 }
 pub fn initialize() {
-    #[cfg(feature = "native")]
     terra_observability::initialize_runtime("zorvane");
 }
 pub fn record_tick(value: Value) {
-    #[cfg(feature = "native")]
     {
         use std::sync::{Mutex, OnceLock};
         static PROJECTOR: OnceLock<Mutex<Projector>> = OnceLock::new();
@@ -85,6 +74,4 @@ pub fn record_tick(value: Value) {
             }
         }
     }
-    #[cfg(not(feature = "native"))]
-    let _ = value;
 }

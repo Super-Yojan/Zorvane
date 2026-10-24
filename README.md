@@ -5,71 +5,56 @@ Part of <https://super-yojan.dev>.
 Fleet operator: [ARGOS](https://super-yojan.dev/ARGOS/).
 Vehicle body: [Terra](https://super-yojan.dev/Terra/).
 
-Zorvane is the platform-agnostic world and competition simulator extracted from
-[Terra](https://github.com/Super-Yojan/Terra). Terra is the vehicle body. ARGOS
-is the fleet operator. This repo is the world: terrain, physics, cameras, and
-the Zenoh bridge those operators already speak.
+Zorvane is the NEXT competition simulator. It runs the NEXT 2026 field on
+Field 3, West Campus, George Mason University, at its real latitude and
+longitude, with CrabTrapBot as the rover. It speaks the same Zenoh topics and
+WebRTC video as a real Terra rover, so a dashboard built against Zorvane works
+against the fleet. Terra is the vehicle body. ARGOS is the fleet operator.
 
-![Practice town](docs/assets/town.png)
+![NEXT pitch](docs/public/media/next.png)
 
-*Default world. The body is [`terra-ground`](VEHICLES.md).*
+*The rules, the field and the controls: [simulator/NEXT.md](simulator/NEXT.md).*
 
-![NEXT pitch](docs/assets/next.png)
+## Download
 
-*`TERRA_NEXT=1`. See [simulator/NEXT.md](simulator/NEXT.md).*
+Builds for macOS, Windows and Linux are on the
+[releases page](https://github.com/Super-Yojan/Zorvane/releases). Unzip and run
+`zorvane`; the intro cutscene explains the game. The simulator listens on
+`tcp/127.0.0.1:7447` with prefix `terra/rover`.
 
-## Platform status
+## Build from source
 
-ARGOS's current operator path is a React browser interface backed by a Rust Axum server and Zenoh. Its native Swift station is a legacy fallback; Unity is a historical prototype. TerraPhone remains the iOS vehicle runtime. Zorvane owns simulation and the student-client browser pairing workflow; that gateway is separate from the ARGOS server.
-
-The browser operator supports authenticated claims, waypoint send/cancel, arm/disarm, autonomy selection, navigation geometry/tuning, and observed occupancy maps. See the [ARGOS README](https://github.com/Super-Yojan/ARGOS/blob/main/README.md) for current startup and control behavior. Vehicle safety and local autonomy remain in Terra.
-
-Zorvane currently pins the shared Terra runtime to `4b582677386b8ed7d5e430585572b83011ea7fc4`, including A* waypoint routing and L4 target search. Later Terra merges require an explicit dependency update and simulator validation. Shared 3D world / GMU development in local branches or working trees is not part of this main-branch release.
-
-## Run
-
-This working version requires a sibling `Terra` checkout at
-`f1f556c8b4c153a6378dd16db6f00e22cc514a48` (or a compatible newer revision).
-`.cargo/config.toml` overrides the release Git pin with that local runtime.
-See the [GCP Zenoh connection guide](docs/dev/gcp-zenoh-connection-guide.md)
-and its [PDF](output/pdf/gcp-zenoh-connection-guide.pdf) for setup and hosted connection instructions.
-
-Connect a client. It prints a pairing URL. Open that URL on the same computer, choose a world, and press Start.
-
-Python 3.10 or newer, or Rust 1.85 or newer.
+Rust 1.85 or newer, Git LFS, and a sibling `Terra` checkout at the revision in
+[`terra-source.json`](terra-source.json):
 
 ```sh
-python3 -m pip install -e clients/python
-python3 -m zorvane
+git lfs pull
+cargo run --locked -p zorvane
 ```
 
-```sh
-cargo run -p zorvane-client --example print_pose
-```
-
-Drive by publishing velocity at least every 500 ms, and send zeros to stop. See [docs/browser-client.md](docs/browser-client.md). Dimensions and sources are in [SCALE.md](SCALE.md).
-
-Desktop, headless, and native Zenoh setups: [docs/dev/native-zenoh.md](docs/dev/native-zenoh.md). The gateway internals: [docs/dev/browser-gateway.md](docs/dev/browser-gateway.md).
-
-Optional standalone [GMU desktop 3D viewer](docs/dev/gmu-viewer.md): explore
-Google Photorealistic 3D Tiles around George Mason Stadium, with your own Map
-Tiles API key. This visual prototype runs separately from NEXT and robot sensors.
+`TERRA_ZENOH=0` turns the bridge off and puts rover 0 on W/A/S/D.
+`TERRA_HEADLESS=1` runs without a window. Dimensions and sources are in
+[SCALE.md](SCALE.md); rover bodies in [VEHICLES.md](VEHICLES.md).
 
 ## Zenoh topics
 
 `P` below is the topic prefix: `terra/rover` by default, overridden with
 `TERRA_ZENOH_PREFIX` (for example, `terra/phone` for the hosted ARGOS setup).
 `<id>` is the rover ID, starting at `0`. Directions are from Zorvane's perspective.
-`TERRA_ZENOH=0` disables the native bridge and allows WASD driving while the
-world is running.
+`TERRA_ZENOH=0` disables the bridge and allows W/A/S/D driving. The full guide,
+with the teleop binding and the FPV handshake, is [simulator/ZENOH.md](simulator/ZENOH.md).
 
 ### Subscribes / receives
 
 | Topic | Purpose |
 | --- | --- |
 | `P/fleet/size` | Set rover count: `{"count": 1}` (0–32). |
-| `P/<id>/cmd_vel` | Velocity command: `{"linear": 1.0, "angular": 0.25}` (m/s and rad/s). |
-| `P/<id>/teleop` | Operator teleoperation request. |
+| `P/<id>/teleop` | Drive: a twist bound to the current run and authority revision. |
+| `P/<id>/next/load` | NEXT: move one waiting ball into the dumper. |
+| `P/<id>/next/dump` | NEXT: dump the dumper into the bucket ahead. |
+| `P/<id>/webrtc/request`, `answer`, `ice/dashboard` | FPV video signaling (Terra `fpv-signaling`). |
+| `P/<id>/hardware` | Arm or disarm. |
+| `P/<id>/navigation/settings`, `source`, `resume` | Navigation configuration. |
 | `P/<id>/autonomy` | Select autonomy level. |
 | `P/<id>/safety` | Safety request. |
 | `P/<id>/goal` | Set or cancel a waypoint goal. |
@@ -82,8 +67,8 @@ world is running.
 The native transport subscribes to `P/**`; the
 [receive handler](simulator/src/bridge.rs) dispatches only the incoming topics
 listed above. Payloads are JSON; messages larger than 2,048 bytes are ignored.
-Per-rover commands require an active rover ID. Refresh `cmd_vel` more often
-than the default 500 ms command timeout, and send zeros to stop.
+Per-rover commands require an active rover ID. A teleop command expires after
+500 ms; refresh it at 10–20 Hz and send zeros to stop.
 
 ### Publishes
 
@@ -91,6 +76,11 @@ than the default 500 ms command timeout, and send zeros to stop.
 | --- | --- |
 | `P/fleet/state` | Rover count, maximum count, and active IDs. |
 | `P/<id>/pose` | Robotics-frame position and heading. |
+| `P/<id>/next/status` | NEXT: alliance, ball counts, load and dump readiness. |
+| `P/next/score` | NEXT: points per alliance. |
+| `P/<id>/localization` | Geographic origin of the field frame (Field 3). |
+| `P/<id>/navigation/outdoor` | Simulated GPS and outdoor navigation state. |
+| `P/<id>/webrtc/offer`, `ice/phone`, `state` | FPV video signaling. |
 | `P/<id>/camera/rgb` | RGB camera frame: RGBA8 sRGB pixels. |
 | `P/<id>/camera/depth` | Depth frame: little-endian float32 metres, with exposure pose metadata. |
 | `P/<id>/map/occupancy` | Full occupancy-map snapshot. |
@@ -119,9 +109,7 @@ Default publication timing:
   source frames.
 
 The [native transport](simulator/src/native_bridge.rs) publishes to the local
-session and the optional fleet session. The browser bridge exposes the same
-topic names through its gateway protocol. Zorvane does not currently publish
-`pointcloud` or `localization`.
+session and the optional fleet session. Zorvane does not publish `pointcloud`.
 
 ### Payload structures
 
@@ -141,7 +129,7 @@ decoding alone does not authorize motion; autonomy and safety state still apply.
 | Topic suffix | Example body |
 | --- | --- |
 | `fleet/size` | `{"count":1}` |
-| `<id>/cmd_vel` | `{"linear":1.0,"angular":0.25}` |
+| `<id>/next/load`, `<id>/next/dump` | `{}` (the body is ignored) |
 | `<id>/teleop` | `{"linear":1.0,"angular":0.25,"run_id":"run-123","authority_revision":2,"operator_session_id":"operator-1","sequence":1}` |
 | `<id>/autonomy` | `{"level":"waypoint","token":"level-1"}` |
 | `<id>/safety` | `{"action":"stop","token":"stop-1"}` |
@@ -154,9 +142,9 @@ decoding alone does not authorize motion; autonomy and safety state still apply.
 | `<id>/search/report/ack` | `{"version":1,"run_id":"run-123","search_id":"search-1","report_id":"report-1","token":"ack-1"}` |
 | `<id>/mission/report` | `{"survivor_id":1}` |
 
-- `teleop`: only `linear` and `angular` are required. The four authority/session
-  fields may be omitted or `null`; the arbiter can require them for the current
-  authority state. Both velocities must be finite and within −5 through +5.
+- `teleop`: bind every command to `run_id` and `revision` from the rover's
+  `autonomy/status`, as `run_id` and `authority_revision`, and increase
+  `sequence` each time. Both velocities must be finite and within −5 through +5.
 - `autonomy.level`: `teleop`, `assisted_teleop`, `waypoint`, `waypoint_direct`,
   `supervised`, or `target_search`.
 - `safety.action`: `stop` or `reset`.
@@ -201,8 +189,22 @@ fleet/state:
   Identifies the last full snapshot baseline, not a new grid.
 
 <id>/hardware/status:
-  {version:1, run_id:string, ready:true, armed:true, arming:false,
-   simulated:true, reason:string}
+  {schema_version:1, run_id:string, control_mode:"streamed_relay",
+   connected:boolean, ready:boolean, output_active:boolean, fault:null,
+   simulated:true, reason:string, armed:boolean}
+
+<id>/next/status:
+  {schema_version:1, alliance:"red"|"blue", target_bucket:"orange"|"blue",
+   state:string, collected:int, waiting:int, dumper:int, capacity:int,
+   dumper_capacity:int, can_load:boolean, can_dump:boolean}
+
+next/score:
+  {schema_version:1, red:int, blue:int}
+
+<id>/localization:
+  {version:1, mode:"geographic", originLatitude:number,
+   originLongitude:number, anchorX:0, anchorY:0, rotation:number,
+   simulated:true}
 
 <id>/goal/status:
   {state:"idle"|"active"|"arrived", goal_id:int, distance:number,
@@ -309,10 +311,8 @@ simulator-specific telemetry.
 ## Test
 
 ```sh
-cargo test --workspace
+cargo test --locked --workspace
 python3 -m pip install -r simulator/tools/requirements.txt
-python3 -m pip install -e clients/python
-python3 -m unittest discover -s clients/python/tests -p 'test_*.py'
 python3 -m unittest discover -s simulator/tools -p 'test_*.py'
 ```
 
@@ -320,14 +320,7 @@ GPU render tests are `#[ignore]`.
 
 ## Layout
 
-- `simulator/` — Bevy/Avian world, cameras, occupancy, Zenoh bridge. Binary name: `zorvane`.
-- `crates/zorvane-vehicle/` — the body seam. `TerraGround` is the chassis that used to be hard-coded in Terra.
-- `crates/zorvane-client/` — native Zenoh client and embedded browser gateway.
-- `crates/zorvane-browser-protocol/` — shared browser/host framing and bounded queues.
-- Shared crates (`terra-types`, `terra-control`, `terra-waypoint`, `terra-transport`, and the autonomy stack) stay in Terra and are git dependencies pinned in `Cargo.toml`. TerraPhone still compiles them there.
-
-What to delete from Terra after this lands: [MIGRATION.md](MIGRATION.md).
-
-Desktop competition with GMU scenery: [NEXT - GMU Stadium setup](simulator/NEXT.md#next---gmu-stadium-desktop).
-=======
-Extraction history and original Terra follow-up checklist: [MIGRATION.md](MIGRATION.md).
+- `simulator/` — Bevy/Avian world, cameras, occupancy, FPV video, Zenoh bridge. Binary name: `zorvane`.
+- `crates/zorvane-vehicle/` — the body seam: `TerraGround` and `CrabTrapBot`.
+- `docs/` — the documentation site, an Astro project published at <https://super-yojan.dev/Zorvane/>.
+- Shared crates (`terra-types`, `terra-control`, `terra-waypoint`, `terra-transport`, and the autonomy stack) stay in Terra. TerraPhone still compiles them there.

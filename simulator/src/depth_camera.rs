@@ -50,9 +50,6 @@ impl Plugin for TerraDepthCameraPlugin {
                 PostUpdate,
                 stamp_exposures.after(TransformSystems::Propagate),
             );
-        // WebGL2 cannot copy a depth texture into a buffer. The browser build
-        // keeps the overview camera and skips the sensor readback.
-        #[cfg(any(not(target_arch = "wasm32"), feature = "browser-bridge"))]
         if app.get_sub_app(RenderApp).is_some() {
             app.add_plugins((
                 ExtractComponentPlugin::<DepthCamera>::default(),
@@ -240,7 +237,6 @@ fn mount_cameras(
     physics: Res<RoverPhysicsConfig>,
     rovers: NewRovers<'_, '_>,
     mut images: ResMut<Assets<Image>>,
-    world: Option<Res<crate::world::WorldConfig>>,
 ) {
     for (rover, id, slot) in &rovers {
         let extent = Extent3d {
@@ -320,11 +316,7 @@ fn mount_cameras(
                     Node {
                         position_type: PositionType::Absolute,
                         right: px(16.0),
-                        bottom: px(if world.as_ref().is_some_and(|w| w.uses_google_scenery()) {
-                            100.0
-                        } else {
-                            16.0
-                        }),
+                        bottom: px(16.0),
                         flex_direction: FlexDirection::Column,
                         padding: UiRect::all(px(8.0)),
                         row_gap: px(6.0),
@@ -600,14 +592,6 @@ mod tests {
                 Transform::from_xyz(0.0, 0.0, -1.5),
             ))
             .id();
-        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-        {
-            app.world_mut()
-                .entity_mut(visual)
-                .insert(bevy_3d_tiles::TileGeometry { set_id: 1 });
-            app.add_systems(Update, crate::gmu::isolate_tiles);
-        }
-        #[cfg(not(all(feature = "gmu-viewer", not(target_arch = "wasm32"))))]
         app.world_mut()
             .entity_mut(visual)
             .insert(bevy::camera::visibility::RenderLayers::layer(1));

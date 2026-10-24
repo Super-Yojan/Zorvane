@@ -14,7 +14,6 @@ pub fn robotics_pose(translation: Vec3, rotation: Quat) -> (f64, f64, f64) {
 }
 
 /// JSON body of `terra/rover/<id>/pose`. `heading` and `yaw` are the same radians.
-#[cfg_attr(not(feature = "native"), allow(dead_code))]
 pub fn pose_payload(x: f64, y: f64, yaw: f64) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "x": x,

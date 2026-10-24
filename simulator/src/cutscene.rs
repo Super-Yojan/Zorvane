@@ -10,7 +10,7 @@
 use crate::next_competition::{
     BUCKETS_PER_HALF, PENALTY_AREA_DEPTH, PITCH_SOUTH, TennisBall, bucket_seed, buckets,
 };
-use crate::world::{SceneKind, WorldCamera, WorldConfig};
+use crate::world::{WorldCamera, WorldConfig};
 use bevy::prelude::*;
 use serde::Deserialize;
 
@@ -202,7 +202,7 @@ fn start(
     if new_field.is_empty()
         || playing.is_some()
         || cameras.is_empty()
-        || config.is_none_or(|config| config.scene != SceneKind::Next)
+        || config.is_none()
     {
         return;
     }

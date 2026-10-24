@@ -8,15 +8,7 @@ use terra_types::{
     ImuSample, MotorOutput, Quaternion, StopReason, Vector3, VelocityTarget, VioSample,
 };
 
-#[cfg(any(feature = "native", feature = "browser-bridge"))]
 use crate::bridge::AutonomyMotorGate;
-#[cfg(not(any(feature = "native", feature = "browser-bridge")))]
-#[derive(Component)]
-struct AutonomyMotorGate {
-    managed: bool,
-    hold: bool,
-    reset: bool,
-}
 
 #[derive(Resource, Clone)]
 pub struct VelocitySimulationConfig {
@@ -74,6 +66,7 @@ pub struct VelocityControlState {
     last_vio: Option<f64>,
     pub output: MotorOutput,
 }
+#[cfg(test)]
 impl VelocityControlState {
     pub(crate) fn new(runtime: terra_runtime::Runtime) -> Self {
         Self {

@@ -1,6 +1,3 @@
-[target.wasm32-unknown-unknown]
-rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
-
 # Local development uses the sibling Terra runtime required by the outdoor simulator.
 [patch."https://github.com/Super-Yojan/Terra.git"]
 terra-transport = { path = "../Terra/crates/terra-transport" }

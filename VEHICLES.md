@@ -1,6 +1,6 @@
 # Vehicle bodies
 
-**TL;DR.** `ZORVANE_VEHICLE` picks a registered body. The default is `terra-ground`. The town and the Zenoh keys stay shared.
+**TL;DR.** `ZORVANE_VEHICLE` picks a registered body. The default is `crab-trap-bot`, the NEXT rover. The field and the Zenoh keys stay shared.
 
 ```mermaid
 flowchart LR
@@ -16,10 +16,6 @@ flowchart LR
 ```
 
 *Differential drive becomes wheel speeds. Anything else stops the process and prints the reason.*
-
-![terra-ground in the practice town](docs/assets/town.png)
-
-*Built-in body. `rover.glb`, a cuboid collider, and differential drive.*
 
 Zorvane spawns the selected body. Chassis size, wheel geometry, and the mesh come from that body.
 
@@ -71,9 +67,8 @@ geometry.
 
 The optimized GLB was made with `gltfpack -si 0.02 -se 0.02 -sp -noq` and
 recentered by its mesh bounds. `-noq` avoids `KHR_mesh_quantization`, which the
-current Bevy glTF loader rejects. The local native
-binary loads it from disk. A published browser build must copy this asset into
-its `assets/models/` directory before it can display the body.
+current Bevy glTF loader rejects. The simulator loads it from
+`simulator/assets/models/`, or from the release's bundled `assets/`.
 
 ## Terra ground rover
 

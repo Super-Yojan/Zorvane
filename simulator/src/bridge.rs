@@ -16,17 +16,11 @@ use terra_waypoint::GoalCommand;
 use terra_waypoint::encode_status;
 #[cfg(test)]
 use terra_waypoint::{GoalState, WaypointConfig, WaypointController};
-use web_time::{Duration, Instant};
-#[cfg(feature = "native")]
+use std::time::{Duration, Instant};
 use zenoh::Wait;
-#[cfg(feature = "native")]
 #[path = "native_bridge.rs"]
 mod native;
-#[cfg(feature = "native")]
 use native::run_transport;
-#[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
-#[path = "browser_bridge.rs"]
-mod browser;
 #[path = "bridge_recording.rs"]
 mod recording;
 
@@ -37,18 +31,12 @@ mod publish_gate;
 pub struct BridgeConfig {
     pub enabled: bool,
     pub prefix: String,
-    #[cfg(feature = "native")]
     pub listen: String,
     /// Comma-separated locators, already split. Empty means no fleet session.
-    #[cfg(feature = "native")]
     pub connect: Vec<String>,
-    #[cfg(feature = "native")]
     pub user: Option<String>,
-    #[cfg(feature = "native")]
     pub password: Option<String>,
-    #[cfg(feature = "native")]
     pub tls_root_ca: Option<String>,
-    #[cfg(feature = "native")]
     pub config_file: Option<String>,
     pub frame_rate: f32,
     pub command_timeout: Duration,
@@ -58,17 +46,11 @@ impl Default for BridgeConfig {
         Self {
             enabled: true,
             prefix: "terra/rover".into(),
-            #[cfg(feature = "native")]
             listen: "tcp/127.0.0.1:7447".into(),
-            #[cfg(feature = "native")]
             connect: Vec::new(),
-            #[cfg(feature = "native")]
             user: None,
-            #[cfg(feature = "native")]
             password: None,
-            #[cfg(feature = "native")]
             tls_root_ca: None,
-            #[cfg(feature = "native")]
             config_file: None,
             frame_rate: 10.0,
             command_timeout: Duration::from_millis(500),
@@ -80,18 +62,12 @@ impl BridgeConfig {
         Self {
             enabled: std::env::var("TERRA_ZENOH").map_or(true, |v| v != "0"),
             prefix: std::env::var("TERRA_ZENOH_PREFIX").unwrap_or_else(|_| "terra/rover".into()),
-            #[cfg(feature = "native")]
             listen: std::env::var("TERRA_ZENOH_LISTEN")
                 .unwrap_or_else(|_| "tcp/127.0.0.1:7447".into()),
-            #[cfg(feature = "native")]
             connect: split_endpoints(&std::env::var("TERRA_ZENOH_CONNECT").unwrap_or_default()),
-            #[cfg(feature = "native")]
             user: nonempty_env("TERRA_ZENOH_USER", true),
-            #[cfg(feature = "native")]
             password: nonempty_env("TERRA_ZENOH_PASSWORD", false),
-            #[cfg(feature = "native")]
             tls_root_ca: nonempty_env("TERRA_ZENOH_TLS_ROOT_CA", true),
-            #[cfg(feature = "native")]
             config_file: nonempty_env("TERRA_ZENOH_CONFIG", true),
             ..default()
         }
@@ -104,16 +80,14 @@ impl BridgeConfig {
         {
             return Err("frame rate must be in [0.1,60] and command timeout must be positive");
         }
-        if !zorvane_browser_protocol::valid_topic(&self.prefix, false) {
+        if !crate::control_queue::valid_topic(&self.prefix, false) {
             return Err("prefix must be a concrete Zenoh key expression");
         }
-        #[cfg(feature = "native")]
         if self.config_path().is_none() {
             self.link_specs()?;
         }
         Ok(())
     }
-    #[cfg(feature = "native")]
     fn config_path(&self) -> Option<&str> {
         self.config_file
             .as_deref()
@@ -121,7 +95,7 @@ impl BridgeConfig {
             .filter(|path| !path.is_empty())
     }
     /// Local peer, then optional fleet client. `TERRA_ZENOH_CONFIG` replaces both.
-    #[cfg(all(test, feature = "native"))]
+    #[cfg(test)]
     fn built_configs(&self) -> Result<Vec<zenoh::Config>, String> {
         if let Some(path) = self.config_path() {
             return zenoh::Config::from_file(path)
@@ -137,7 +111,6 @@ impl BridgeConfig {
     }
     /// The listener stays a separate peer. Zenoh usrpwd covers every link on a
     /// session, so fleet credentials never share that listener.
-    #[cfg(feature = "native")]
     fn link_specs(&self) -> Result<(Option<ZenohLinkSpec>, Option<ZenohLinkSpec>), &'static str> {
         let listen = trimmed(&self.listen);
         let connect: Vec<String> = self
@@ -202,28 +175,23 @@ impl BridgeConfig {
         Ok((local, fleet))
     }
 }
-#[cfg(feature = "native")]
 fn nonempty_env(key: &str, trim: bool) -> Option<String> {
     let value = std::env::var(key).ok()?;
     let value = if trim { value.trim().to_owned() } else { value };
     (!value.is_empty()).then_some(value)
 }
-#[cfg(feature = "native")]
 fn split_endpoints(value: &str) -> Vec<String> {
     value.split(',').filter_map(trimmed).collect()
 }
-#[cfg(feature = "native")]
 fn trimmed(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
 }
-#[cfg(feature = "native")]
 fn valid_locator(endpoint: &str) -> bool {
     (endpoint.starts_with("tcp/") || endpoint.starts_with("tls/"))
         && endpoint.parse::<zenoh::config::EndPoint>().is_ok()
 }
 /// One Zenoh session. The fleet client is a second spec when `connect` is set.
-#[cfg(feature = "native")]
 struct ZenohLinkSpec {
     mode: &'static str,
     listen: Vec<String>,
@@ -233,7 +201,6 @@ struct ZenohLinkSpec {
     tls_root_ca: Option<String>,
     exit_on_connect_failure: bool,
 }
-#[cfg(feature = "native")]
 impl ZenohLinkSpec {
     fn to_zenoh_config(&self) -> zenoh::Result<zenoh::Config> {
         let mut config = zenoh::Config::default();
@@ -288,7 +255,6 @@ impl Plugin for SimulatorBridgePlugin {
             .validate()
             .expect("invalid Terra Zenoh configuration");
         let shared = Arc::new(Shared::default());
-        #[cfg(feature = "native")]
         {
             let thread_shared = shared.clone();
             let config = self.config.clone();
@@ -301,10 +267,6 @@ impl Plugin for SimulatorBridgePlugin {
                     thread_shared.connected.store(false, Ordering::Release);
                 })
                 .expect("could not start Zenoh worker");
-        }
-        #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
-        if !browser::install(app, shared.clone(), &self.config) {
-            return;
         }
         app.insert_resource(self.config.clone())
             .insert_resource(Bridge { shared })
@@ -397,8 +359,6 @@ struct Shared {
     outgoing: Mutex<Outgoing>,
     connected: AtomicBool,
     stop: AtomicBool,
-    #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
-    recording: recording::BrowserRecording,
 }
 impl Shared {
     fn receive(&self, prefix: &str, key: &str, bytes: &[u8]) {
@@ -447,7 +407,7 @@ impl Shared {
                 | "search/report/ack"
         ) {
             let mut actions = self.actions.lock().unwrap();
-            zorvane_browser_protocol::enqueue_control_action(
+            crate::control_queue::enqueue_control_action(
                 actions.entry(id).or_default(),
                 kind.into(),
                 bytes.to_vec(),
@@ -456,7 +416,7 @@ impl Shared {
         }
     }
 
-    #[cfg(any(test, all(target_arch = "wasm32", feature = "browser-bridge")))]
+    #[cfg(test)]
     fn disconnect(&self) {
         self.connected.store(false, Ordering::Release);
         self.commands
@@ -470,11 +430,6 @@ impl Shared {
         self.actions.lock().unwrap().clear();
         *self.fleet_request.lock().unwrap() = None;
         *self.outgoing.lock().unwrap() = Outgoing::default();
-        #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
-        {
-            self.recording.healthy.store(false, Ordering::Release);
-            // Preserve queued recording events across transport loss.
-        }
     }
 }
 #[derive(Resource)]
@@ -515,7 +470,7 @@ fn publish_next_state(
 ) {
     let now = time.elapsed_secs_f64();
     if now - *last < 0.2
-        || config.is_none_or(|config| config.scene != crate::world::SceneKind::Next)
+        || config.is_none()
     {
         return;
     }
@@ -655,7 +610,6 @@ struct GoalRuntime {
 fn drive_goals(
     bridge: Res<Bridge>,
     world: Option<Res<crate::world::WorldConfig>>,
-    patch: Option<Res<crate::geo::GeoPatch>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
     mut rovers: Query<
         (&RoverId, &Transform, &mut DriveCommand),
@@ -668,7 +622,9 @@ fn drive_goals(
         .as_ref()
         .map(|world| (f64::from(world.size) * 0.5 - 1.0).max(1.0))
         .unwrap_or(500.0);
-    let anchor = patch.as_ref().map(|patch| &patch.anchor);
+    let anchor = world
+        .as_ref()
+        .and(crate::mason_field::geographic_reference());
     let paused = keys.is_some_and(|keys| keys.pressed(KeyCode::Space));
     let mut seen = std::collections::BTreeSet::new();
     for (id, transform, mut command) in &mut rovers {
@@ -926,7 +882,7 @@ fn publish_frames(
         }
     }
 }
-#[cfg(all(test, feature = "native"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1277,7 +1233,7 @@ mod tests {
     }
     #[test]
     fn timeout_and_missing_commands_stop_the_rover() {
-        use web_time::{Duration, Instant};
+        use std::time::{Duration, Instant};
         let now = Instant::now();
         let timeout = Duration::from_millis(500);
         let command = DriveCommand {
@@ -1899,7 +1855,6 @@ struct AutonomousRover {
     near_miss: terra_experiment::NearMiss,
     contacts: std::collections::BTreeSet<Entity>,
     observed_area: terra_experiment::ObservedArea,
-    detector_frame: Option<u64>,
 }
 #[derive(Component, Default)]
 pub(crate) struct AutonomyMotorGate {
@@ -1915,16 +1870,14 @@ struct AutonomyRuntime {
     connection_generation: u64,
     run_id: String,
     recorder: Option<recording::Recorder>,
-    #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
-    manifest: serde_json::Value,
     mission: terra_experiment::Mission,
     last_publish: f64,
     sequence: u64,
 }
 impl Default for AutonomyRuntime {
     fn default() -> Self {
-        let stamp = web_time::SystemTime::now()
-            .duration_since(web_time::UNIX_EPOCH)
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let run_id = format!("run-{stamp}");
@@ -1936,10 +1889,7 @@ impl Default for AutonomyRuntime {
                 .unwrap_or(42),
         );
         let manifest = serde_json::json!({"run_id":run_id,"platform":"bevy","runtime_source_revision":terra_runtime::SOURCE_REVISION,"mission":config,"trial_design":std::env::var("TERRA_TRIAL_DESIGN").unwrap_or_else(|_|"adaptive".into()),"planner":terra_navigation::PlannerConfig::default(),"collision_observation":"simulator_contacts","target_detector":{"id":"sim-survivor-v1","classes":["survivor"],"range_m":5,"half_fov_radians":std::f64::consts::FRAC_PI_3,"confirmation":terra_autonomy::ConfirmationConfig::default()},"git_revision":option_env!("TERRA_GIT_REVISION").unwrap_or("unknown")});
-        #[cfg(feature = "native")]
         let recorder = recording::Recorder::native(manifest.clone());
-        #[cfg(not(feature = "native"))]
-        let recorder = None;
         Self {
             rovers: BTreeMap::new(),
             occupancy_gates: BTreeMap::new(),
@@ -1948,8 +1898,6 @@ impl Default for AutonomyRuntime {
             connection_generation: 0,
             run_id,
             recorder,
-            #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
-            manifest,
             mission: terra_experiment::Mission::new(config).unwrap(),
             last_publish: -1.,
             sequence: 0,
@@ -2027,7 +1975,6 @@ fn drive_autonomy(
     bridge: Res<Bridge>,
     time: Res<Time<Fixed>>,
     world: Option<Res<crate::world::WorldConfig>>,
-    patch: Option<Res<crate::geo::GeoPatch>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
     mut entities: Commands,
     contacts: Option<avian3d::prelude::Collisions>,
@@ -2050,14 +1997,6 @@ fn drive_autonomy(
 ) {
     use terra_autonomy::*;
 
-    #[cfg(all(target_arch = "wasm32", feature = "browser-bridge"))]
-    if runtime.recorder.is_none() {
-        runtime.recorder = Some(recording::Recorder::browser(
-            bridge.shared.clone(),
-            runtime.run_id.clone(),
-            runtime.manifest.clone(),
-        ));
-    }
     let now = time.elapsed_secs_f64();
     let generation = bridge.shared.connection_generation.load(Ordering::Acquire);
     let replaced = runtime.connection_generation != generation;
@@ -2108,7 +2047,6 @@ fn drive_autonomy(
                 near_miss: Default::default(),
                 contacts: Default::default(),
                 observed_area: Default::default(),
-                detector_frame: None,
             });
         let pose = rt.pose.unwrap_or_default().0;
         let (x, y, _) = (pose.x, pose.y, pose.yaw);
@@ -2122,16 +2060,11 @@ fn drive_autonomy(
                 received_at: now,
             });
         }
-        let mut geo_reference = patch.as_ref().map(|p| crate::outdoor::GeoReference {
-            latitude: p.anchor.latitude,
-            longitude: p.anchor.longitude,
-            heading: 0.,
-        });
-        // The NEXT pitch is placed on Field 3 (West Campus), with or without
-        // Google scenery, so outdoor GPS navigation works on it.
-        if world.as_ref().is_some_and(|w| w.scene == crate::world::SceneKind::Next) {
-            geo_reference = crate::mason_field::geographic_reference();
-        }
+        // The pitch is placed on Field 3 (West Campus), so outdoor GPS
+        // navigation works on it.
+        let geo_reference = world
+            .as_ref()
+            .and(crate::mason_field::geographic_reference());
         rt.outdoor.supported = geo_reference.is_some();
         if let Some(reference) = geo_reference {
             rt.autonomy
@@ -2159,7 +2092,7 @@ fn drive_autonomy(
         }
         if let Some(mut queue) = actions.remove(&id.0) {
             for (kind, payload, received) in
-                zorvane_browser_protocol::drain_control_actions(&mut queue)
+                crate::control_queue::drain_control_actions(&mut queue)
             {
                 if kind == "hardware" {
                     apply_hardware_command(
@@ -2185,7 +2118,7 @@ fn drive_autonomy(
                 });
             }
         }
-        let mut hardware = zorvane_browser_protocol::simulated_relay_status(
+        let mut hardware = crate::control_queue::simulated_relay_status(
             &runtime.run_id,
             tracked.armed,
             output_active,
@@ -2197,36 +2130,6 @@ fn drive_autonomy(
         });
         if space {
             rt.autonomy.hold_emergency_stop();
-        }
-        let detector_enabled = std::env::var("TERRA_MISSION").as_deref() == Ok("1");
-        if detector_enabled
-            && map_time.is_some_and(|t| now - t < terra_types::timing::MAP_FRESHNESS_SECONDS)
-        {
-            let _ = rt.ingest(terra_runtime::RuntimeEvent::Detector {
-                classes: vec!["survivor".into()],
-                version: "sim-survivor-v1".into(),
-                received_at: now,
-            });
-            if let (Some(grid), Some(search)) = (snapshot.as_ref(), rt.autonomy.search_status(now))
-            {
-                let frame = map.map_or(0, |m| m.last_sequence);
-                if tracked.detector_frame != Some(frame) {
-                    tracked.detector_frame = Some(frame);
-                    if let Some(sample) = crate::target_search::observation(
-                        grid,
-                        pose,
-                        runtime.mission.candidates(),
-                        &search,
-                        frame,
-                        now,
-                    ) {
-                        let _ = rt.ingest(terra_runtime::RuntimeEvent::Target {
-                            sample,
-                            received_at: now,
-                        });
-                    }
-                }
-            }
         }
         let Ok(runtime_output) = rt.step(now) else {
             continue;
@@ -2337,8 +2240,8 @@ fn drive_autonomy(
             let _ = r.record(event);
         }
         if due || output.reset_controller {
-            let utc = web_time::SystemTime::now()
-                .duration_since(web_time::UNIX_EPOCH)
+            let utc = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs_f64();
             let mut outgoing = bridge.shared.outgoing.lock().unwrap();
@@ -2377,7 +2280,7 @@ fn drive_autonomy(
                 (
                     "hardware/status",
                     {
-                        let mut status = zorvane_browser_protocol::simulated_relay_status(
+                        let mut status = crate::control_queue::simulated_relay_status(
                             &runtime.run_id,
                             connected && tracked.armed,
                             !hold
@@ -2465,7 +2368,7 @@ fn drive_autonomy(
         .retain(|id, _| seen.contains(id));
 }
 
-#[cfg(all(test, feature = "native"))]
+#[cfg(test)]
 mod autonomy_integration_tests {
     use super::*;
     #[test]

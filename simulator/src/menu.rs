@@ -1,6 +1,6 @@
 //! Start screen and pause menu. Escape or the corner button pauses a running world.
 
-use crate::session::{Phase, RebuildWorld, SimSession, WorldChoice, menu_rover_max};
+use crate::session::{Phase, RebuildWorld, SimSession, menu_rover_max};
 use bevy::prelude::*;
 
 pub struct MenuPlugin;
@@ -11,48 +11,6 @@ impl Plugin for MenuPlugin {
             Update,
             (toggle_pause, sync_clock, clicks, rebuild_ui, sync_ui_camera).chain(),
         );
-        #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-        app.add_systems(Update, sync_gmu_status.after(rebuild_ui));
-    }
-}
-
-#[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-#[derive(Component)]
-pub(crate) struct GmuRetryButton;
-#[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-#[derive(Component)]
-pub(crate) struct GmuViewButton;
-#[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-#[derive(Component)]
-struct GmuStatus;
-
-#[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-fn sync_gmu_status(
-    access: Option<Res<crate::gmu::Access>>,
-    config: Option<Res<crate::world::WorldConfig>>,
-    credits: Option<Res<bevy_3d_tiles::TilesetCredits>>,
-    mut labels: Query<&mut Text, With<GmuStatus>>,
-) {
-    if let Some(access) = access {
-        let message = if config.as_ref().is_some_and(|c| c.uses_google_scenery())
-            && credits.is_some_and(|c| c.google_visible)
-        {
-            if config
-                .as_ref()
-                .is_some_and(|c| c.scene == crate::world::SceneKind::Tiles)
-            {
-                "Google imagery is live. Robots use the elevation terrain."
-            } else {
-                "GMU imagery is live. Robot views use the practice surface."
-            }
-        } else {
-            &access.status
-        };
-        for mut text in &mut labels {
-            if text.0 != message {
-                text.0 = message.to_owned();
-            }
-        }
     }
 }
 
@@ -61,20 +19,11 @@ struct UiCamera;
 #[derive(Component)]
 struct MenuRoot;
 #[derive(Component)]
-struct PickWorld(WorldChoice);
-
-/// Worlds the menu offers. Only the NEXT competition for the packaged release;
-/// the elevation map and Google scenery stay in code, reachable with
-/// `TERRA_TILES=1` and `TERRA_NEXT_GMU=1`.
-const MENU_WORLDS: &[WorldChoice] = &[WorldChoice::Next];
-#[derive(Component)]
 struct StartButton;
 #[derive(Component)]
 struct ResumeButton;
 #[derive(Component)]
 struct RestartButton;
-#[derive(Component)]
-struct LoadButton;
 #[derive(Component)]
 struct PauseButton;
 #[derive(Component)]
@@ -120,21 +69,13 @@ fn clicks(
     mut commands: Commands,
     mut session: ResMut<SimSession>,
     mut fleet: Option<ResMut<crate::terra::RoverFleet>>,
-    worlds: Query<(&Interaction, &PickWorld), Changed<Interaction>>,
     start: Query<&Interaction, (Changed<Interaction>, With<StartButton>)>,
     resume: Query<&Interaction, (Changed<Interaction>, With<ResumeButton>)>,
     restart: Query<&Interaction, (Changed<Interaction>, With<RestartButton>)>,
-    load: Query<&Interaction, (Changed<Interaction>, With<LoadButton>)>,
     pause: Query<&Interaction, (Changed<Interaction>, With<PauseButton>)>,
     steps: Query<(&Interaction, &RoverStep), Changed<Interaction>>,
 ) {
     let pressed = |interaction: &Interaction| *interaction == Interaction::Pressed;
-    for (interaction, pick) in &worlds {
-        if pressed(interaction) && session.world != pick.0 {
-            session.world = pick.0;
-            session.ui_epoch = session.ui_epoch.wrapping_add(1);
-        }
-    }
     for (interaction, step) in &steps {
         if !pressed(interaction) {
             continue;
@@ -146,11 +87,6 @@ fn clicks(
         }
     }
     if start.iter().any(pressed) && session.phase == Phase::Menu {
-        session.phase = Phase::Playing;
-        session.ui_epoch = session.ui_epoch.wrapping_add(1);
-        commands.insert_resource(RebuildWorld);
-    }
-    if load.iter().any(pressed) && session.phase == Phase::Paused {
         session.phase = Phase::Playing;
         session.ui_epoch = session.ui_epoch.wrapping_add(1);
         commands.insert_resource(RebuildWorld);
@@ -251,51 +187,16 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool) {
                 .with_children(|panel| {
                     label(
                         panel,
-                        if paused { "Paused" } else { "Zorvane" },
+                        if paused { "Paused" } else { "NEXT Competition" },
                         32.0,
                         Color::WHITE,
                     );
                     label(
                         panel,
-                        "1 unit = 1 metre. Esc pauses.",
+                        "Field 3, West Campus. Esc pauses.",
                         16.0,
                         Color::srgb(0.75, 0.78, 0.80),
                     );
-                    if !session.note.is_empty() {
-                        label(panel, &session.note, 15.0, Color::srgb(0.95, 0.72, 0.45));
-                    }
-                    label(panel, "World", 14.0, Color::srgb(0.62, 0.68, 0.70));
-                    for &choice in MENU_WORLDS {
-                        button(
-                            panel,
-                            choice.label(),
-                            PickWorld(choice),
-                            session.world == choice,
-                        );
-                    }
-                    #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-                    if matches!(session.world, WorldChoice::Gmu | WorldChoice::Tiles) {
-                        panel.spawn((
-                            GmuStatus,
-                            Text::new("Connecting map scenery..."),
-                            TextFont {
-                                font_size: FontSize::Px(14.0),
-                                ..default()
-                            },
-                            TextColor(Color::srgb(0.75, 0.78, 0.80)),
-                        ));
-                        panel
-                            .spawn(Node {
-                                column_gap: px(8),
-                                ..default()
-                            })
-                            .with_children(|row| {
-                                button(row, "Retry scenery", GmuRetryButton, false);
-                                if paused {
-                                    button(row, "Switch camera", GmuViewButton, false);
-                                }
-                            });
-                    }
                     label(panel, "Rovers", 14.0, Color::srgb(0.62, 0.68, 0.70));
                     panel
                         .spawn(Node {
@@ -318,7 +219,6 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool) {
                             .with_children(|row| {
                                 button(row, "Resume", ResumeButton, true);
                                 button(row, "Restart", RestartButton, false);
-                                button(row, "Load world", LoadButton, false);
                             });
                     } else {
                         button(panel, "Start", StartButton, true);
@@ -370,7 +270,7 @@ fn button<T: Component>(parent: &mut ChildSpawnerCommands, text: &str, marker: T
         });
 }
 
-#[cfg(all(test, feature = "gmu-viewer", not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -385,36 +285,24 @@ mod tests {
     }
 
     #[test]
-    fn menu_offers_only_next_and_runs_start_pause_resume_restart() {
+    fn menu_runs_start_pause_resume_restart() {
         let mut app = App::new();
-        app.insert_resource(SimSession::at_menu(WorldChoice::Next, 1))
-            .insert_resource(crate::world::WorldConfig::for_choice(WorldChoice::Next))
+        app.insert_resource(SimSession::at_menu(1))
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Time<Virtual>>()
             .add_plugins(MenuPlugin);
         app.update();
-        let world = app.world_mut();
-        let offered: Vec<_> = world
-            .query::<&PickWorld>()
-            .iter(world)
-            .map(|pick| pick.0)
-            .collect();
-        assert_eq!(offered, vec![WorldChoice::Next]);
         press::<StartButton>(&mut app);
         assert_eq!(app.world().resource::<SimSession>().phase, Phase::Playing);
         assert!(app.world().contains_resource::<RebuildWorld>());
         app.world_mut().remove_resource::<RebuildWorld>();
         press::<PauseButton>(&mut app);
         assert_eq!(app.world().resource::<SimSession>().phase, Phase::Paused);
-        let world = app.world_mut();
-        let offered = world.query::<&PickWorld>().iter(world).count();
-        assert_eq!(offered, 1, "the pause menu offers the same single world");
         press::<ResumeButton>(&mut app);
         assert_eq!(app.world().resource::<SimSession>().phase, Phase::Playing);
         assert!(!app.world().contains_resource::<RebuildWorld>());
         press::<PauseButton>(&mut app);
         press::<RestartButton>(&mut app);
         assert!(app.world().contains_resource::<RebuildWorld>());
-        assert_eq!(app.world().resource::<SimSession>().world, WorldChoice::Next);
     }
 }

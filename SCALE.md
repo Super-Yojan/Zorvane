@@ -76,39 +76,6 @@ Each bucket is a standard 5-gallon bucket from a user-supplied product diagram. 
 
 The old open-front boxes (1.2 × 0.75 × 0.30 m, two of them in the north goal area) are gone. Nothing in the Terra repo or issue #21 gives a bucket drawing.
 
-## Practice town
-
-Already authored in metres. Footprints are fractions of the 100 m square (`landscape.rs`), not a surveyed street.
-
-| Quantity | Value | Source |
-| --- | --- | --- |
-| Square | **100 m** | `WorldConfig::default`. `simulator/WORLD.md` |
-| Road width | **6 m** | `LandscapeConfig::default`. Order of a two-lane street; **not** taken from a named road standard |
-| Sidewalk | **1.2 m** wide | `spawn_roads` |
-| Door | **2.0 × 1.0 m** | `generate_landscape` |
-| Window | **0.85 × 1.0 m** | same, one per 2.5 m of height |
-| Building footprint | 8% × 7% of the square (**8 × 7 m** at the default 100 m) | `layout` |
-| Building height | **3–10 m** | `3 + seeded unit interval × 7` |
-| Trees | library mesh × **0.75–1.20** | `bevy_procedural_tree` 0.4 `TreeMeshSettings::default()`, leaf size overridden to 0.55. **unsourced** as a species height |
-| Pond | **14%** of the square (**14 m** at the default) | `layout`. Wave amplitude 0.025 m is the water shader, not a surveyed depth |
-| Boundary posts | **0.3 × 1.0 × 0.3 m** | `generate_world` corner markers |
-| Voxel hills | ring at 43–50% of the half-width | `voxel_terrain.rs`. Decorative perimeter, not a DEM |
-
-## Elevation tiles
-
-| Quantity | Value | Source |
-| --- | --- | --- |
-| Patch | **100 m** square, clamp **40–512 m** | `TERRA_WORLD_SIZE`, `geo.rs` |
-| Sample step | native Terrarium texel, about **4 m** at zoom 15, clamped to 2–12 m | `sample_step` |
-| Obstacle slope | neighbour rise/run **> 0.35** | `GeoTileConfig::slope_limit` |
-| Obstacle height | `(slope × step)` clamped to **0.9–3.5 m** | **unsourced visual clamp** in `build_patch`, not a surveyed object height |
-| Spawn clearance | **3 m** | `CLEARANCE_M` |
-| Anchor | 38.8297 N, 77.3075 W | George W. Johnson Center, GMU. `geo.rs` |
-
-## Mission rubble
-
-`TERRA_MISSION=1` only. Boxes in `mission.rs` `layout`: footprints from 1×6 m to 6×1 m, heights 0.8–1.8 m. **unsourced** seeded rubble. The menu does not switch to this scene; `TERRA_NEXT` and the in-app NEXT choice still skip it.
-
 ## What changed versus the old collider
 
 The old chassis box was 0.9 × 0.16 × 0.8 m with visual scale 0.025. Treating the CAD units as inches then made the box 1.023 × 0.367 × 0.977 m. The published USD stage is centimetres, so the box and the mesh scale are now 0.403 × 0.144 × 0.384 m at scale 0.01.

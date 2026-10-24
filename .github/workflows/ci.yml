@@ -61,41 +61,14 @@ jobs:
           sudo swapon "$swapfile"
           swapon --show
 
-      - name: Python client tests
+      - name: Python tool tests
         run: |
           python3 -m venv .venv
           .venv/bin/pip install -r simulator/tools/requirements.txt
-          .venv/bin/pip install -e clients/python
           .venv/bin/python -m unittest discover -s simulator/tools -p 'test_*.py'
-          .venv/bin/python -m unittest discover -s clients/python/tests -p 'test_*.py'
 
       - name: Cargo test
         env:
           CARGO_BUILD_JOBS: "2"
           RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
         run: cargo test --locked --workspace
-
-  wasm:
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Shared Terra source
-        run: bash .github/scripts/checkout-terra.sh
-
-      - name: Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Check wasm build
-        env:
-          CARGO_BUILD_JOBS: "2"
-        run: cargo check --locked -p zorvane --target wasm32-unknown-unknown --no-default-features
-
-      - name: Check WebGPU bridge build
-        env:
-          CARGO_BUILD_JOBS: "2"
-        run: cargo check --locked -p zorvane --target wasm32-unknown-unknown --no-default-features --features browser-bridge

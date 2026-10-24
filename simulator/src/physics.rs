@@ -203,6 +203,7 @@ mod tests {
         .add_systems(FixedUpdate, drive.before(PhysicsSystems::StepSimulation));
         if generated {
             app.insert_resource(Assets::<StandardMaterial>::default())
+                .init_asset::<Image>()
                 .add_plugins(crate::world::TerraWorldPlugin::default());
         }
         app.finish();
@@ -241,7 +242,7 @@ mod tests {
 
     #[test]
     fn generated_world_has_scaled_static_colliders() {
-        use crate::world::{BoundaryMarker, Ground};
+        use crate::world::Ground;
         let mut app = simulation_with_world(true);
         let entity = rover(&mut app, DriveCommand::default());
         app.world_mut()
@@ -259,13 +260,6 @@ mod tests {
                 .iter(world)
                 .count(),
             1
-        );
-        assert_eq!(
-            world
-                .query_filtered::<&Collider, With<BoundaryMarker>>()
-                .iter(world)
-                .count(),
-            4
         );
     }
 

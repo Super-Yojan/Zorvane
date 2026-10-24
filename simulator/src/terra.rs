@@ -248,9 +248,7 @@ pub(crate) fn reconcile_fleet(
     }
     let mut occupied: std::collections::BTreeSet<_> =
         existing.iter().map(|(_, _, slot, _)| slot.0).collect();
-    let next_field = world
-        .as_ref()
-        .is_some_and(|world| world.scene == crate::world::SceneKind::Next);
+    let next_field = world.is_some();
     let fleet_count = fleet.count();
     let spacing = if next_field {
         physics.chassis_size.x + 0.2

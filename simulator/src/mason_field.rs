@@ -10,7 +10,7 @@
 //! physics and the simulated GPS all see the same authored world.
 
 use crate::next_competition::NextField;
-use crate::world::{SceneKind, WorldConfig};
+use crate::world::WorldConfig;
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
@@ -179,10 +179,7 @@ pub(crate) fn spawn_surroundings(
     config: Option<Res<WorldConfig>>,
     existing: Query<(), With<MasonSurroundings>>,
 ) {
-    let Some(config) = config else {
-        return;
-    };
-    if config.scene != SceneKind::Next || config.gmu_stadium || !existing.is_empty() {
+    if config.is_none() || !existing.is_empty() {
         return;
     }
     let Some(assets) = assets else {
@@ -228,7 +225,7 @@ fn apply_lighting(
     mut sky: ResMut<ClearColor>,
     mut suns: Query<(&mut DirectionalLight, &mut Transform), Added<DirectionalLight>>,
 ) {
-    if config.is_none_or(|config| config.scene != SceneKind::Next) {
+    if config.is_none() {
         return;
     }
     let (lux, color, elevation, azimuth, ambient_brightness, sky_color, shadows) =
@@ -236,7 +233,7 @@ fn apply_lighting(
     for (mut sun, mut transform) in &mut suns {
         sun.illuminance = lux;
         sun.color = color;
-        sun.shadow_maps_enabled = shadows && cfg!(not(target_arch = "wasm32"));
+        sun.shadow_maps_enabled = shadows;
         let (elevation, azimuth) = (elevation.to_radians(), azimuth.to_radians());
         // Azimuth clockwise from the pitch's north goal (Bevy -Z).
         let toward_sun = Vec3::new(

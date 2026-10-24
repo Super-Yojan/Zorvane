@@ -47,7 +47,6 @@ const MARKING_Y: f32 = 0.008;
 /// Regulation tennis ball, metres and kilograms.
 pub const TENNIS_BALL_RADIUS: f32 = 0.0335;
 pub const TENNIS_BALL_MASS: f32 = 0.058;
-pub const BALLS_PER_GOAL: usize = 36;
 pub const ROVER_BALL_CAPACITY: usize = 8;
 /// Maximum balls staged in the top-mounted dumper before a dump press.
 pub const DUMPER_CAPACITY: usize = 2;
@@ -81,21 +80,6 @@ pub const SPAWN_CLEARANCE: f32 = 1.6;
 /// Scoring bucket just ahead of each goal-line rover spawn.
 pub const DEFAULT_BUCKET_SEED: u64 = 42;
 
-pub fn enabled() -> bool {
-    #[cfg(all(feature = "gmu-viewer", not(target_arch = "wasm32")))]
-    if crate::gmu::requested() {
-        return true;
-    }
-    // The NEXT competition is the default world. An explicit TERRA_NEXT
-    // decides; otherwise asking for the elevation map (TERRA_TILES=1) opts out.
-    let flag = |name| match std::env::var(name).as_deref() {
-        Ok("1") | Ok("true") | Ok("TRUE") => Some(true),
-        Ok("0") | Ok("false") | Ok("FALSE") => Some(false),
-        _ => None,
-    };
-    flag("TERRA_NEXT").unwrap_or(flag("TERRA_TILES") != Some(true))
-}
-
 pub fn install(app: &mut App) {
     let menu = app
         .world()
@@ -127,7 +111,7 @@ pub fn install(app: &mut App) {
                 .chain()
                 .before(PhysicsSystems::StepSimulation),
         );
-    if enabled() && !menu {
+    if !menu {
         app.add_systems(
             Startup,
             (spawn_field, crate::mason_field::spawn_surroundings),
@@ -486,6 +470,7 @@ pub struct NextTeamScore {
 }
 
 impl NextTeamScore {
+    #[cfg(test)]
     pub fn total(self) -> usize {
         self.red + self.blue
     }
@@ -591,12 +576,8 @@ pub(crate) fn spawn_field(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     assets: Option<Res<AssetServer>>,
-    config: Option<Res<crate::world::WorldConfig>>,
     mut score: Option<ResMut<NextTeamScore>>,
 ) {
-    if config.is_some_and(|config| config.scene != crate::world::SceneKind::Next) {
-        return;
-    }
     if let Some(score) = score.as_mut() {
         **score = NextTeamScore::default();
     }
@@ -1306,7 +1287,7 @@ fn operator_active(
     config: Option<&crate::world::WorldConfig>,
     session: Option<&crate::session::SimSession>,
 ) -> bool {
-    config.is_some_and(|config| config.scene == crate::world::SceneKind::Next)
+    config.is_some()
         && session.is_none_or(|session| session.phase == crate::session::Phase::Playing)
 }
 
@@ -2319,7 +2300,7 @@ mod tests {
     #[test]
     fn one_button_press_loads_one_ball_even_while_mouse_is_held() {
         let mut app = App::new();
-        app.insert_resource(WorldConfig::for_choice(crate::session::WorldChoice::Next))
+        app.insert_resource(WorldConfig::default())
             .insert_resource(RoverPhysicsConfig::default())
             .insert_resource(NextTeamScore::default())
             .insert_resource(ButtonInput::<MouseButton>::default())
@@ -2399,7 +2380,7 @@ mod tests {
     #[test]
     fn red_dump_into_an_orange_bucket_on_the_blue_half_scores_after_landing() {
         let mut app = physics_app();
-        app.insert_resource(WorldConfig::for_choice(crate::session::WorldChoice::Next))
+        app.insert_resource(WorldConfig::default())
             .insert_resource(NextTeamScore::default())
             .insert_resource(Assets::<Mesh>::default())
             .insert_resource(Assets::<StandardMaterial>::default())
@@ -2476,7 +2457,7 @@ mod tests {
     #[test]
     fn dashboard_dump_command_scores_like_the_hud_button() {
         let mut app = physics_app();
-        app.insert_resource(WorldConfig::for_choice(crate::session::WorldChoice::Next))
+        app.insert_resource(WorldConfig::default())
             .insert_resource(NextTeamScore::default())
             .insert_resource(Assets::<Mesh>::default())
             .insert_resource(Assets::<StandardMaterial>::default())
@@ -2544,7 +2525,7 @@ mod tests {
             ),
         ] {
             let mut app = physics_app();
-            app.insert_resource(WorldConfig::for_choice(crate::session::WorldChoice::Next))
+            app.insert_resource(WorldConfig::default())
                 .insert_resource(NextTeamScore::default())
                 .insert_resource(Assets::<Mesh>::default())
                 .insert_resource(Assets::<StandardMaterial>::default())
@@ -2749,11 +2730,8 @@ mod tests {
     }
 
     #[test]
-    fn next_world_replaces_the_practice_town() {
-        let mut config = WorldConfig::default();
-        config.prepare_next_field();
-        assert!(!config.landscape.enabled);
-        assert!(!config.tiles.enabled);
+    fn default_world_frames_the_rover_on_the_pitch() {
+        let config = WorldConfig::default();
         assert_eq!(config.size, WORLD_SIZE);
         assert!(config.camera_offset.y < 8.0 && config.camera_offset.z < 10.0);
         assert!(config.follow_rover);
@@ -2771,11 +2749,7 @@ mod tests {
             .insert_resource(ButtonInput::<KeyCode>::default())
             .add_plugins((
                 TerraWorldPlugin {
-                    config: {
-                        let mut config = WorldConfig::default();
-                        config.prepare_next_field();
-                        config
-                    },
+                    config: WorldConfig::default(),
                 },
                 TerraPlugin::default(),
             ))
