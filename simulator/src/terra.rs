@@ -317,8 +317,11 @@ pub(crate) fn reconcile_fleet(
         if slot == 0 {
             rover.insert(KeyboardControlled);
         }
+        if next_field {
+            rover.insert(crate::next_competition::RoverBallLoad::default());
+        }
         if crab_trap && next_field {
-            rover.insert(crate::next_competition::CarriedBalls::default());
+            rover.insert(crate::next_competition::CrabTrapIntake);
         }
         if let Some(assets) = &assets {
             rover.with_children(|parent| {
@@ -358,6 +361,7 @@ type RoverDriveQuery<'w, 's> = Query<
     's,
     (
         &'static DriveCommand,
+        Option<&'static crate::next_competition::RoverBallLoad>,
         &'static mut WheelSpeeds,
         &'static mut Odometry,
         &'static Rotation,
@@ -368,8 +372,13 @@ type RoverDriveQuery<'w, 's> = Query<
 >;
 
 pub(crate) fn drive(time: Res<Time<Fixed>>, config: Res<DriveConfig>, mut rovers: RoverDriveQuery) {
-    for (command, mut wheels, mut pose, rotation, mut linear, mut angular) in &mut rovers {
-        *wheels = config.wheels(*command);
+    for (command, load, mut wheels, mut pose, rotation, mut linear, mut angular) in &mut rovers {
+        let command = if load.is_some_and(|load| load.waiting > 0) {
+            DriveCommand::default()
+        } else {
+            *command
+        };
+        *wheels = config.wheels(command);
         let (v, w) = if config.validate().is_ok() {
             config.twist(*wheels)
         } else {

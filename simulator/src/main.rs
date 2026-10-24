@@ -10,6 +10,8 @@ mod landscape;
 mod menu;
 mod mission;
 mod next_competition;
+mod observability;
+mod observation_capture;
 mod occupancy_map;
 mod physics;
 mod rgb_camera;
@@ -48,6 +50,8 @@ fn asset_root() -> String {
 }
 
 fn main() {
+    observability::initialize();
+    observation_capture::initialize();
     #[cfg(target_arch = "wasm32")]
     console_error_panic_hook::set_once();
     let vehicles = zorvane_vehicle::VehicleRegistry::from_env().expect("invalid ZORVANE_VEHICLE");

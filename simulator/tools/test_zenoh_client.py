@@ -66,13 +66,18 @@ class FrameTests(unittest.TestCase):
                 except Exception as error:
                     errors.append(error)
                     event.set()
+            authority = {}
+            authority_subscriber = session.declare_subscriber("terra/rover/0/autonomy/status", lambda sample: authority.update(json.loads(bytes(sample.payload))))
             subscriber = session.declare_subscriber("terra/rover/0/camera/*", receive)
             self.assertTrue(event.wait(5), "RGB and depth did not arrive")
             self.assertFalse(errors, errors)
-            for _ in range(10):
-                session.put("terra/rover/0/cmd_vel", json.dumps({"linear": 1.0, "angular": 0.25}))
+            for sequence in range(1, 11):
+                if "run_id" in authority:
+                    session.put("terra/rover/0/teleop", json.dumps({"linear": 1.0, "angular": 0.25, "run_id": authority["run_id"], "authority_revision": authority["revision"], "operator_session_id": "python-test", "sequence": sequence}))
                 time.sleep(0.05)
-            session.put("terra/rover/0/cmd_vel", json.dumps({"linear": 0.0, "angular": 0.0}))
+            self.assertIn("run_id", authority)
+            session.put("terra/rover/0/teleop", json.dumps({"linear": 0.0, "angular": 0.0}))
+            authority_subscriber.undeclare()
             subscriber.undeclare()
 
 

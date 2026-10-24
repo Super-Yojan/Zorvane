@@ -2,8 +2,8 @@
 use crate::terra::{DriveCommand, DriveConfig, Odometry, Rover, WheelSpeeds};
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use terra_control::{ControllerConfig, VelocityController};
-use terra_state::{EstimatorConfig, VelocityEstimator};
+use terra_control::ControllerConfig;
+
 use terra_types::{
     ImuSample, MotorOutput, Quaternion, StopReason, Vector3, VelocityTarget, VioSample,
 };
@@ -13,6 +13,7 @@ use crate::bridge::AutonomyMotorGate;
 #[cfg(not(any(feature = "native", feature = "browser-bridge")))]
 #[derive(Component)]
 struct AutonomyMotorGate {
+    managed: bool,
     hold: bool,
     reset: bool,
 }
@@ -46,6 +47,8 @@ pub struct TerraVelocityControlPlugin;
 impl Plugin for TerraVelocityControlPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<VelocitySimulationConfig>()
+            .insert_resource(Time::<Fixed>::from_hz(100.0))
+            .add_systems(FixedPreUpdate, sample_sensors)
             .add_systems(
                 PreUpdate,
                 mount_controllers.after(crate::terra::reconcile_fleet),
@@ -63,15 +66,19 @@ pub(crate) fn ideal_drive_enabled(config: Option<Res<VelocitySimulationConfig>>)
 }
 #[derive(Component)]
 pub struct VelocityControlState {
-    estimator: VelocityEstimator,
-    controller: VelocityController,
+    pub runtime: terra_runtime::Runtime,
     last_velocity: Option<Vec3>,
     last_vio: Option<f64>,
     pub output: MotorOutput,
 }
 impl VelocityControlState {
-    pub fn healthy(&self, time: f64) -> bool {
-        self.estimator.estimate(time).health == terra_types::Health::Ready
+    pub(crate) fn new(runtime: terra_runtime::Runtime) -> Self {
+        Self {
+            runtime,
+            last_velocity: None,
+            last_vio: None,
+            output: MotorOutput::stopped(StopReason::SensorNotReady),
+        }
     }
 }
 fn mount_controllers(
@@ -88,9 +95,22 @@ fn mount_controllers(
         };
         commands.entity(entity).insert((
             VelocityControlState {
-                estimator: VelocityEstimator::new(EstimatorConfig::default()).unwrap(),
-                controller: VelocityController::new(controller_config)
-                    .expect("invalid simulated motor parameters"),
+                runtime: terra_runtime::Runtime::new(
+                    terra_runtime::RuntimeConfig {
+                        controller: controller_config,
+                        mode: if std::env::var("TERRA_ACTUATION_MODE").as_deref()
+                            == Ok("direct_effort")
+                        {
+                            terra_runtime::ActuationMode::DirectEffort
+                        } else {
+                            terra_runtime::ActuationMode::VelocityFeedback
+                        },
+                        outdoor_supported: true,
+                        ..Default::default()
+                    },
+                    format!("sim-{}", entity.to_bits()),
+                )
+                .expect("invalid simulated runtime parameters"),
                 last_velocity: None,
                 last_vio: None,
                 output: MotorOutput::stopped(StopReason::SensorNotReady),
@@ -107,11 +127,79 @@ fn world_vector(value: Vec3) -> Vector3 {
         z: value.y as f64,
     }
 }
+fn sample_sensors(
+    time: Res<Time<Fixed>>,
+    config: Res<VelocitySimulationConfig>,
+    mut rovers: Query<
+        (
+            &Rotation,
+            &Position,
+            &LinearVelocity,
+            &AngularVelocity,
+            &mut VelocityControlState,
+        ),
+        With<Rover>,
+    >,
+) {
+    let t = time.elapsed_secs_f64();
+    let dt = time.delta_secs();
+    if dt <= 0.0 {
+        return;
+    }
+    for (rotation, position, velocity, angular, mut brain) in &mut rovers {
+        let basis = Quat::from_mat3(&Mat3::from_cols(
+            Vec3::new(0., -1., 0.),
+            Vec3::new(0., 0., 1.),
+            Vec3::new(-1., 0., 0.),
+        ));
+        let q = basis * rotation.0 * basis.inverse();
+        let orientation = Quaternion {
+            x: q.x as f64,
+            y: q.y as f64,
+            z: q.z as f64,
+            w: q.w as f64,
+        };
+        let acceleration = brain
+            .last_velocity
+            .map_or(Vec3::ZERO, |last| (velocity.0 - last) / dt);
+        brain.last_velocity = Some(velocity.0);
+        if config.imu_enabled {
+            let sample = ImuSample {
+                timestamp: t,
+                acceleration: orientation.conjugate().rotate(world_vector(acceleration)),
+                angular_velocity: orientation.conjugate().rotate(world_vector(angular.0)),
+            };
+            let _ = brain.runtime.ingest(terra_runtime::RuntimeEvent::Imu {
+                sample,
+                received_at: t,
+            });
+        }
+        if config.vio_enabled
+            && brain
+                .last_vio
+                .is_none_or(|last| t - last >= 1.0 / config.vio_rate)
+        {
+            let sample = VioSample {
+                timestamp: t,
+                position: world_vector(position.0),
+                orientation,
+                velocity: world_vector(velocity.0),
+                tracked: true,
+            };
+            let _ = brain.runtime.ingest(terra_runtime::RuntimeEvent::Vio {
+                sample,
+                received_at: t,
+            });
+            brain.last_vio = Some(t);
+        }
+    }
+}
 type ControlledRovers<'w, 's> = Query<
     'w,
     's,
     (
         &'static DriveCommand,
+        Option<&'static crate::next_competition::RoverBallLoad>,
         Option<&'static AutonomyMotorGate>,
         &'static Rotation,
         &'static Position,
@@ -132,7 +220,7 @@ fn control_and_apply(
     mut rovers: ControlledRovers<'_, '_>,
 ) {
     if !config.enabled {
-        for (_, _, _, _, _, _, _, mut force, mut torque, _, _) in &mut rovers {
+        for (_, _, _, _, _, _, _, _, mut force, mut torque, _, _) in &mut rovers {
             force.0 = Vec3::ZERO;
             torque.0 = Vec3::ZERO;
         }
@@ -145,9 +233,10 @@ fn control_and_apply(
     }
     for (
         request,
+        load,
         gate,
         rotation,
-        position,
+        _position,
         velocity,
         angular,
         mut brain,
@@ -157,53 +246,27 @@ fn control_and_apply(
         mut odometry,
     ) in &mut rovers
     {
-        let yaw = rotation.0.to_euler(EulerRot::YXZ).0 as f64;
-        let orientation = Quaternion::from_rotation_vector(Vector3 {
-            z: yaw,
-            ..Vector3::ZERO
-        });
-        let acceleration = brain
-            .last_velocity
-            .map_or(Vec3::ZERO, |last| (velocity.0 - last) / dt);
-        brain.last_velocity = Some(velocity.0);
-        if config.imu_enabled {
-            let sample = ImuSample {
+        let waiting = load.is_some_and(|load| load.waiting > 0);
+        if gate.is_none() {
+            let target = VelocityTarget {
                 timestamp: t,
-                acceleration: orientation.conjugate().rotate(world_vector(acceleration)),
-                angular_velocity: Vector3 {
-                    z: angular.y as f64,
-                    ..Vector3::ZERO
-                },
+                forward: if waiting { 0.0 } else { request.linear as f64 },
+                yaw_rate: if waiting { 0.0 } else { request.angular as f64 },
             };
-            let _ = brain.estimator.push_imu(sample);
+            let _ = brain
+                .runtime
+                .ingest(terra_runtime::RuntimeEvent::LocalVelocity {
+                    target,
+                    received_at: t,
+                });
+            if let Ok(out) = brain.runtime.step(t) {
+                brain.output = out.motor;
+            }
         }
-        if config.vio_enabled
-            && brain
-                .last_vio
-                .is_none_or(|last| t - last >= 1.0 / config.vio_rate)
-        {
-            let _ = brain.estimator.push_vio(VioSample {
-                timestamp: t,
-                position: world_vector(position.0),
-                orientation,
-                velocity: world_vector(velocity.0),
-                tracked: true,
-            });
-            brain.last_vio = Some(t);
-        }
-        if gate.is_some_and(|g| g.reset || g.hold) {
-            brain.controller.reset();
-        }
-        let _ = brain.controller.set_target(VelocityTarget {
-            timestamp: t,
-            forward: request.linear as f64,
-            yaw_rate: request.angular as f64,
-        });
-        let estimate = brain.estimator.estimate(t);
-        let output = if gate.is_some_and(|g| g.hold) {
+        let output = if waiting {
             MotorOutput::stopped(StopReason::SensorNotReady)
         } else {
-            brain.controller.step(estimate)
+            brain.output
         };
         brain.output = output;
         let forward = (rotation.0 * Vec3::NEG_Z).with_y(0.0).normalize_or_zero();
@@ -230,6 +293,107 @@ mod tests {
         physics::{RoverBody, RoverPhysicsConfig, TerraPhysicsPlugin},
         terra::{DriveCommand, DriveConfig, Odometry, Rover, WheelSpeeds},
     };
+    #[test]
+    fn simulator_sensor_adapter_matches_portable_runtime_replay() {
+        for mode in [
+            terra_runtime::ActuationMode::DirectEffort,
+            terra_runtime::ActuationMode::VelocityFeedback,
+        ] {
+            let config = terra_runtime::RuntimeConfig {
+                mode,
+                ..Default::default()
+            };
+            let mut reference =
+                terra_runtime::Runtime::new(config.clone(), "replay".into()).unwrap();
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .insert_resource(VelocitySimulationConfig {
+                    vio_rate: 1000.0,
+                    ..Default::default()
+                })
+                .add_systems(FixedPreUpdate, sample_sensors);
+            let entity = app
+                .world_mut()
+                .spawn((
+                    Rover,
+                    Rotation::IDENTITY,
+                    Position(Vec3::new(-2.0, 0.0, -1.0)),
+                    LinearVelocity::ZERO,
+                    AngularVelocity::ZERO,
+                    VelocityControlState::new(
+                        terra_runtime::Runtime::new(config, "replay".into()).unwrap(),
+                    ),
+                ))
+                .id();
+            for tick in 1..=100 {
+                let t = tick as f64 * 0.01;
+                app.world_mut()
+                    .resource_mut::<Time<Fixed>>()
+                    .advance_by(std::time::Duration::from_millis(10));
+                app.world_mut().run_schedule(FixedPreUpdate);
+                reference
+                    .ingest(terra_runtime::RuntimeEvent::Imu {
+                        sample: ImuSample {
+                            timestamp: t,
+                            acceleration: Vector3::ZERO,
+                            angular_velocity: Vector3::ZERO,
+                        },
+                        received_at: t,
+                    })
+                    .unwrap();
+                reference
+                    .ingest(terra_runtime::RuntimeEvent::Vio {
+                        sample: VioSample {
+                            timestamp: t,
+                            position: Vector3 {
+                                x: 1.0,
+                                y: 2.0,
+                                z: 0.0,
+                            },
+                            orientation: Quaternion::default(),
+                            velocity: Vector3::ZERO,
+                            tracked: true,
+                        },
+                        received_at: t,
+                    })
+                    .unwrap();
+                let target = VelocityTarget {
+                    timestamp: t,
+                    forward: 0.2,
+                    yaw_rate: 0.1,
+                };
+                reference
+                    .ingest(terra_runtime::RuntimeEvent::LocalVelocity {
+                        target,
+                        received_at: t,
+                    })
+                    .unwrap();
+                let expected = reference.step(t).unwrap();
+                let mut state = app
+                    .world_mut()
+                    .get_mut::<VelocityControlState>(entity)
+                    .unwrap();
+                state
+                    .runtime
+                    .ingest(terra_runtime::RuntimeEvent::LocalVelocity {
+                        target,
+                        received_at: t,
+                    })
+                    .unwrap();
+                let actual = state.runtime.step(t).unwrap();
+                assert!((actual.motor.left - expected.motor.left).abs() <= 1e-6);
+                assert!((actual.motor.right - expected.motor.right).abs() <= 1e-6);
+                assert_eq!(
+                    actual.snapshot.value["status"],
+                    expected.snapshot.value["status"]
+                );
+                assert_eq!(
+                    actual.autonomy.command_origin,
+                    expected.autonomy.command_origin
+                );
+            }
+        }
+    }
     #[test]
     fn feedback_controller_tracks_velocity_using_motor_forces_and_stops() {
         let mut app = App::new();

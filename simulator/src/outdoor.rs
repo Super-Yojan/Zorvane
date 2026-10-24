@@ -50,11 +50,16 @@ impl GeoReference {
     }
 }
 
+/// In-simulator outdoor admission kept with main's geographic frame.
+/// The shared runtime admits source changes, resume, and goals; hardware
+/// disarm is applied to that runtime from the bridge.
+#[allow(dead_code)]
 pub(crate) struct OutdoorSim {
     pub controller: OutdoorController,
     pub armed: bool,
     tokens: VecDeque<String>,
 }
+#[allow(dead_code)]
 impl Default for OutdoorSim {
     fn default() -> Self {
         Self {
@@ -64,6 +69,7 @@ impl Default for OutdoorSim {
         }
     }
 }
+#[allow(dead_code)]
 impl OutdoorSim {
     pub fn sensors(&mut self, reference: Option<GeoReference>, pose: Pose, now: f64) {
         self.controller.supported = reference.is_some();

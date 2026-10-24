@@ -564,7 +564,7 @@ mod tests {
                 .query::<&crate::next_competition::TennisBall>()
                 .iter(world)
                 .count(),
-            6
+            crate::next_competition::ball_positions().len()
         );
         assert_eq!(
             world
