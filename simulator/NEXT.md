@@ -106,6 +106,36 @@ The pitch is placed on Field 3 (below), so the bridge publishes a geographic
 `localization` report and simulated GPS on `navigation/outdoor`. ARGOS shows the
 rover at Field 3, and Terra's outdoor GPS navigation runs on the simulated field.
 
+### Letting an AI model play
+
+[`tools/zorvane_mcp.py`](tools/zorvane_mcp.py) is an MCP server that lets any
+MCP client (Claude Code, Claude Desktop, or a local model behind an MCP-capable
+runner) play the match as one rover. It talks to Zorvane over the same Zenoh
+topics as ARGOS, so every command passes the rover's authority and safety checks.
+
+```sh
+python3 -m pip install -r simulator/tools/requirements.txt
+cargo run -p zorvane                       # Zenoh on, the default
+claude mcp add zorvane -- python3 simulator/tools/zorvane_mcp.py --rover 0
+```
+
+The server's instructions give the model the field frame and the scoring loop.
+Its tools:
+
+| Tool | What the model does with it |
+| --- | --- |
+| `get_match_state` | Score, ball counts, `can_load`/`can_dump`, pose, autonomy level, goal and proposal |
+| `look` | Forward camera image (PNG) with the pose it was taken from |
+| `get_map` | Occupancy map as text, north at the top |
+| `set_autonomy_level` | Pick L0 `teleop` to L4 `target_search` |
+| `go_to` | Waypoint goal in field metres or latitude/longitude, L3 or L2, optionally waiting for arrival |
+| `drive` | Teleop burst of at most 5 s at most 2 m/s, then stop |
+| `stop` | Safety stop and goal cancel |
+| `load_ball`, `dump` | The NEXT LOAD and DUMP buttons |
+| `answer_proposal` | Approve or reject a supervised-exploration goal |
+
+Bucket positions are not exposed; the model has to find them with `look`.
+
 ### Rebuilding the assets
 
 The field's models and textures are generated, not hand-edited:
