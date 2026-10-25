@@ -297,7 +297,20 @@ def build_server(rover, telemetry):
         body = ({"frame": "local", "x": x, "y": y} if x is not None
                 else {"frame": "wgs84", "latitude": latitude, "longitude": longitude})
         body["token"] = f"goal-{time.time_ns()}"
-        rover.put("goal", bound(telemetry.authority(), body))
+        # A level change can bump the authority revision just after the level
+        # reports active; a goal bound to the old revision is dropped, so
+        # resend with fresh authority until the goal ID moves.
+        for _ in range(3):
+            rover.put("goal", bound(telemetry.authority(), body))
+            accept_by = time.monotonic() + 1.0
+            while time.monotonic() < accept_by and \
+                    (telemetry.json("goal/status") or {}).get("goal_id", 0) == before:
+                time.sleep(0.05)
+            if (telemetry.json("goal/status") or {}).get("goal_id", 0) != before:
+                break
+        else:
+            return json.dumps({"error": "goal not accepted",
+                               "autonomy": match_summary(telemetry)["autonomy"]})
         deadline = time.monotonic() + min(max(wait_s, 0.0), 60.0)
         status = None
         while True:
