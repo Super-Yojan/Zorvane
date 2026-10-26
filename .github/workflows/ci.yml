@@ -1,9 +1,8 @@
 name: Zorvane
 
 on:
-  pull_request:
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 concurrency:
