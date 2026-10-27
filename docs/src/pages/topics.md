@@ -37,6 +37,7 @@ that is not spawned are ignored, and every command payload must fit in 2048 byte
 | `<id>/goal/status` | Progress for the latched goal |
 | `<id>/map/occupancy`, `<id>/map/occupancy/heartbeat` | Occupancy grid from the depth camera. Full snapshots on change, heartbeats in between |
 | `<id>/goal/proposal`, `<id>/exploration/status`, `<id>/search/status`, `<id>/search/report`, `<id>/mission/status`, `<id>/experiment/status` | Terra autonomy and run status |
+| `<id>/objects` | Buckets and balls from the shared YOLO detector: local `x`/`y`, class, colour, sightings, `confirmed`. Same body as TerraPhone |
 | `<id>/webrtc/offer`, `<id>/webrtc/ice/phone`, `<id>/webrtc/state` | FPV signaling |
 | `fleet/state` | `{"count":3,"max_count":32,"ids":[0,1,2]}`, on change and every second |
 
