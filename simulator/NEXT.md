@@ -106,6 +106,43 @@ The pitch is placed on Field 3 (below), so the bridge publishes a geographic
 `localization` report and simulated GPS on `navigation/outdoor`. ARGOS shows the
 rover at Field 3, and Terra's outdoor GPS navigation runs on the simulated field.
 
+### Letting an AI model play
+
+[`tools/zorvane_mcp.py`](tools/zorvane_mcp.py) is an MCP server that lets any
+MCP client (Claude Code, Claude Desktop, or a local model behind an MCP-capable
+runner) play the match as one rover. It talks to Zorvane over the same Zenoh
+topics as ARGOS, so every command passes the rover's authority and safety checks.
+
+```sh
+python3 -m venv ~/.venvs/zorvane-mcp       # Homebrew Python refuses a global pip install
+~/.venvs/zorvane-mcp/bin/pip install -r simulator/tools/requirements.txt
+cargo run -p zorvane                       # Zenoh and the detector on, the defaults
+claude mcp add zorvane -s local -- ~/.venvs/zorvane-mcp/bin/python \
+    "$PWD/simulator/tools/zorvane_mcp.py" --rover 0
+```
+
+The server's instructions give the model the field frame and the scoring loop.
+Its tools:
+
+| Tool | What the model does with it |
+| --- | --- |
+| `get_match_state` | Score, ball counts, `can_load`/`can_dump`, pose, autonomy level, goal, and the nearest detected bucket of its colour |
+| `get_objects` | Buckets and balls from the shared YOLO detector (`<id>/objects`): field x/y, range, bearing, `yours`, points per ball, and the `dump_pose` to park in |
+| `look` | Forward camera image (PNG) with the pose it was taken from |
+| `get_map` | Field-wide occupancy as text, north at the top, merged from every local snapshot so far, with the rover, buckets and balls marked |
+| `set_autonomy_level` | Pick L0 `teleop` to L4 `explore` (with a budget) or `target_search` |
+| `go_to` | Waypoint goal in field metres or latitude/longitude. `auto` tries L3 and falls back to L2 on `route_no_path` or a stale map; L2 first arcs to face the goal |
+| `approach_bucket` | Drive to a detected bucket of its colour and creep in until `can_dump` |
+| `drive` | Teleop burst of at most 5 s at most 2 m/s, then stop |
+| `cancel_goal` | End a waypoint goal without an emergency stop |
+| `stop`, `reset_safety` | Latch the emergency stop; clear it with a bound reset |
+| `load_ball`, `dump` | The NEXT LOAD and DUMP buttons |
+
+Bucket positions come only from the detector, so the model still has to drive
+and turn to see them; with `ZORVANE_OBJECTS=0` it is back to `look`. Playing
+notes from the first full match are in
+[`.claude/skills/play-zorvane/SKILL.md`](../.claude/skills/play-zorvane/SKILL.md).
+
 ### Rebuilding the assets
 
 The field's models and textures are generated, not hand-edited:

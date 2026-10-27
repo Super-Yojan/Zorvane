@@ -13,7 +13,9 @@ against the fleet. Terra is the vehicle body. ARGOS is the fleet operator.
 
 ![NEXT on Field 3](docs/public/media/field3.jpg)
 
-*The rules, the field and the controls: [simulator/NEXT.md](simulator/NEXT.md).*
+*The rules, the field and the controls: [simulator/NEXT.md](simulator/NEXT.md).
+To let an AI model play through MCP, see
+[Letting an AI model play](simulator/NEXT.md#letting-an-ai-model-play).*
 
 ## Download
 
