@@ -208,6 +208,10 @@ impl RoverFleet {
         self.count = count;
         Ok(())
     }
+    /// The next spawned rover gets id 0 again. Only for a rebuilt field.
+    pub fn restart_ids(&mut self) {
+        self.next_id = 0;
+    }
     pub fn from_env() -> Result<Self, String> {
         let mut fleet = Self::default();
         if let Ok(value) = std::env::var("TERRA_ROVER_COUNT") {

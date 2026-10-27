@@ -84,7 +84,8 @@ remote-controlled rover.
 
 ## Topics
 
-There is no shared command topic that drives every rover. Commands for an id
+There is no shared command topic that drives every rover. Once a player holds a
+rover's seat, only that player's signed commands reach it ([MULTIPLAYER.md](MULTIPLAYER.md)). Commands for an id
 that is not spawned are ignored, and every command payload must fit in 2048 bytes.
 
 ### Commands (dashboard to simulator)
@@ -97,7 +98,8 @@ that is not spawned are ignored, and every command payload must fit in 2048 byte
 | `<id>/next/load` | Any payload: move one waiting ball into the dumper |
 | `<id>/next/dump` | Any payload: dump when `next/status` says `can_dump` |
 | `<id>/webrtc/request`, `<id>/webrtc/answer`, `<id>/webrtc/ice/dashboard` | FPV signaling. See [FPV video](#fpv-video) |
-| `fleet/size` | `{"count":3}`, 0 through 32 |
+| `fleet/size` | `{"count":3}`, 0 through 32. Host key only with `ZORVANE_MATCH=seated` |
+| `match/join`, `match/heartbeat`, `match/leave`, `match/control` | Multiplayer seats and host actions. See [MULTIPLAYER.md](MULTIPLAYER.md) |
 | `<id>/autonomy`, `<id>/goal/decision`, `<id>/hardware`, `<id>/navigation/settings`, `<id>/navigation/source`, `<id>/navigation/resume`, `<id>/search`, `<id>/search/action`, `<id>/search/report/ack`, `<id>/mission/report` | Terra autonomy contract, decoded by the Terra crates |
 
 ### State (simulator to dashboard)
@@ -118,6 +120,7 @@ that is not spawned are ignored, and every command payload must fit in 2048 byte
 | `<id>/objects` | Buckets and balls from the shared YOLO detector: local `x`/`y`, class, colour, sightings, `confirmed`. Same body as TerraPhone |
 | `<id>/webrtc/offer`, `<id>/webrtc/ice/phone`, `<id>/webrtc/state` | FPV signaling |
 | `fleet/state` | `{"count":3,"max_count":32,"ids":[0,1,2]}`, on change and every second |
+| `match/state` | Seats, free rovers and match phase, every second. See [MULTIPLAYER.md](MULTIPLAYER.md) |
 
 Keys are relative to the prefix: `<id>/pose` is `terra/rover/0/pose` for rover 0.
 

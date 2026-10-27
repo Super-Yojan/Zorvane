@@ -144,23 +144,49 @@ fn connect_fleet(spec: ZenohLinkSpec, prefix: String, shared: Arc<Shared>, state
     }
 }
 
-fn subscribe(
-    session: &zenoh::Session,
-    prefix: &str,
-    shared: &Arc<Shared>,
-) -> zenoh::Result<zenoh::pubsub::Subscriber<()>> {
+/// The command subscriber and the multiplayer queryables of one session.
+struct Inbox {
+    _commands: zenoh::pubsub::Subscriber<()>,
+    _join: zenoh::query::Queryable<()>,
+    _ping: zenoh::query::Queryable<()>,
+}
+
+fn subscribe(session: &zenoh::Session, prefix: &str, shared: &Arc<Shared>) -> zenoh::Result<Inbox> {
     let incoming = shared.clone();
-    let prefix = prefix.to_owned();
-    session
+    let owned_prefix = prefix.to_owned();
+    let commands = session
         .declare_subscriber(format!("{prefix}/**"))
         .callback(move |sample| {
-            incoming.receive(
-                &prefix,
+            let attachment = sample.attachment().map(|bytes| bytes.to_bytes());
+            incoming.receive_signed(
+                &owned_prefix,
                 sample.key_expr().as_str(),
                 sample.payload().to_bytes().as_ref(),
+                attachment.as_deref(),
             );
         })
-        .wait()
+        .wait()?;
+    // Joins need the fleet, so the simulation answers them on its next frame.
+    let joins = shared.clone();
+    let join = session
+        .declare_queryable(format!("{prefix}/match/join"))
+        .callback(move |query| joins.joins.lock().unwrap().push(query))
+        .wait()?;
+    // Answered here, so a client measures the network, not the frame rate.
+    let ping = session
+        .declare_queryable(format!("{prefix}/match/ping"))
+        .callback(|query| {
+            let key = query.key_expr().clone();
+            if let Err(error) = query.reply(key, "{}").wait() {
+                debug!("match/ping reply failed: {error}");
+            }
+        })
+        .wait()?;
+    Ok(Inbox {
+        _commands: commands,
+        _join: join,
+        _ping: ping,
+    })
 }
 
 fn publish_loop(
@@ -197,6 +223,16 @@ fn publish_loop(
             publish_each(
                 &sessions,
                 format!("{}/fleet/state", config.prefix),
+                state,
+                zenoh::bytes::Encoding::APPLICATION_JSON,
+                Some(zenoh::qos::CongestionControl::Drop),
+                &mut noted_partial,
+            )?;
+        }
+        if let Some(state) = outgoing.match_state {
+            publish_each(
+                &sessions,
+                format!("{}/match/state", config.prefix),
                 state,
                 zenoh::bytes::Encoding::APPLICATION_JSON,
                 Some(zenoh::qos::CongestionControl::Drop),
