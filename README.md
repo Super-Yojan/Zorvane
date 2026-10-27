@@ -63,6 +63,16 @@ cargo run --locked -p zorvane
 `TERRA_HEADLESS=1` runs without a window. Dimensions and sources are in
 [SCALE.md](SCALE.md); rover bodies in [VEHICLES.md](VEHICLES.md).
 
+## Multiplayer
+
+Players on other computers join one host's match, as people with ARGOS or
+teleop, or as AI agents through the MCP server. The host runs with
+`TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447 ZORVANE_MATCH=seated`; each player runs
+`python3 simulator/tools/zorvane_player.py --host tcp/<host>:7447 --name <you>`
+and points their client at `tcp/127.0.0.1:7447`. Seats, signed commands, match
+start/reset, latency and internet play are in
+[simulator/MULTIPLAYER.md](simulator/MULTIPLAYER.md).
+
 ## Zenoh topics
 
 `P` below is the topic prefix: `terra/rover` by default, overridden with
