@@ -9,6 +9,9 @@ simulator/runs/
 .DS_Store
 *.swp
 .venv/
+.venv-*/
+simulator/.cache/
+*.egg-info/
 
 # Local simulation recordings.
 /runs/

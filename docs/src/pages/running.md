@@ -45,6 +45,7 @@ Set these in the environment before you start `zorvane`.
 | `TERRA_NEXT_CAMERA=overview` | Watch the whole field instead of following rover 0 |
 | `ZORVANE_FPV=0` | Turn FPV video off |
 | `ZORVANE_OBJECTS=0` | Turn off bucket and ball detection (one shared YOLO model for all rovers) |
+| `ZORVANE_RGB_PREVIEW=1` | Show rover 0's front RGB camera in the lower-left corner |
 | `TERRA_HEADLESS=1` | No window |
 
 ```sh

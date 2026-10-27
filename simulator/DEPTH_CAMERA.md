@@ -7,6 +7,7 @@
 *Just ahead of the chassis, looking along local −Z.*
 
 The lower-right square of the window is the depth preview for rover 0. The start and pause menus toggle it (`preview` is the initial state; `sync_previews` adds or removes it as that flag changes).
+Run with `ZORVANE_RGB_PREVIEW=1` to show rover 0's matching RGB camera in the lower-left corner.
 
 `TerraDepthCameraPlugin` is registered in `main.rs`. It mounts one sensor on each new rover. The mount is in metres and ignores GLB scale.
 

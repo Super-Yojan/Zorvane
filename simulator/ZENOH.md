@@ -56,6 +56,9 @@ bound `teleop` at 20 Hz, and sends a zero on completion or Ctrl-C. `goto` select
 `waypoint_direct` (or `--level waypoint`), sends one bound goal and prints
 `goal/status` until `arrived`.
 
+For the experimental Ollama/Qwen NEXT gameplay agent, see
+[QWEN_NEXT_AGENT.md](tools/QWEN_NEXT_AGENT.md).
+
 ## Driving: bound teleop
 
 `terra/rover/<id>/teleop` drives a rover. Each command is bound to the rover's
@@ -127,8 +130,9 @@ Keys are relative to the prefix: `<id>/pose` is `terra/rover/0/pose` for rover 0
 {"schema_version":1,"alliance":"red","target_bucket":"orange","state":"CARRYING BALLS","collected":3,"waiting":0,"dumper":0,"capacity":8,"dumper_capacity":2,"can_load":false,"can_dump":false}
 ```
 
-`state` is `SEARCHING`, `CARRYING BALLS`, `FULL: RETURN TO GOAL` or `WAITING FOR
-OPERATOR`. Balls in the intake are `collected`; back at the rover's own goal
+`state` is `SEARCHING`, `CARRYING BALLS`, `FULL: RETURN TO GOAL`, `WAITING FOR
+OPERATOR`, or `DUMPER LOADED: GO DUMP`. Balls in the intake are `collected`;
+back at the rover's own goal
 line they become `waiting`; `next/load` moves one into the `dumper`. `can_dump`
 is true while the dumper holds a ball and the outlet is over one of the
 alliance's ground-level buckets. The rules are in [NEXT.md](NEXT.md#loading-and-dumping).
