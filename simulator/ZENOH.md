@@ -115,6 +115,7 @@ that is not spawned are ignored, and every command payload must fit in 2048 byte
 | `<id>/goal/status` | Progress for the latched goal |
 | `<id>/map/occupancy`, `<id>/map/occupancy/heartbeat` | Occupancy grid from the depth camera. See [PUBLISHING.md](PUBLISHING.md) |
 | `<id>/goal/proposal`, `<id>/exploration/status`, `<id>/search/status`, `<id>/search/report`, `<id>/mission/status`, `<id>/experiment/status` | Terra autonomy and run status |
+| `<id>/objects` | Buckets and balls from the shared YOLO detector: local `x`/`y`, class, colour, sightings, `confirmed`. Same body as TerraPhone |
 | `<id>/webrtc/offer`, `<id>/webrtc/ice/phone`, `<id>/webrtc/state` | FPV signaling |
 | `fleet/state` | `{"count":3,"max_count":32,"ids":[0,1,2]}`, on change and every second |
 
@@ -264,6 +265,7 @@ fleet size.
 | `TERRA_ZENOH_CONFIG` | Full Zenoh JSON5 configuration file; replaces the default session configuration |
 | `TERRA_RUN_DIR` | Run logs as JSONL, default `runs` |
 | `ZORVANE_FPV`, `ZORVANE_FPV_STUN` | FPV video, above |
+| `ZORVANE_OBJECTS` | Set to `0` to turn off bucket and ball detection |
 
 For a dashboard on another computer, set the listener to `tcp/0.0.0.0:7447` and
 connect to `tcp/SIMULATOR_IP:7447`. Restart after correcting a session startup
