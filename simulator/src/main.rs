@@ -6,6 +6,7 @@ mod fpv;
 mod mason_field;
 mod menu;
 mod next_competition;
+mod object_detection;
 mod observability;
 mod observation_capture;
 mod occupancy_map;
@@ -110,6 +111,7 @@ fn main() {
             TerraDepthCameraPlugin::default(),
             occupancy_map::TerraOccupancyMapPlugin,
             rgb_camera::TerraRgbCameraPlugin,
+            object_detection::TerraObjectDetectionPlugin,
             bridge::SimulatorBridgePlugin {
                 config: bridge::BridgeConfig::from_env(),
             },

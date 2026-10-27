@@ -2315,6 +2315,8 @@ fn drive_autonomy(
                     "mission/status",
                     serde_json::to_value(runtime.mission.status(now)).unwrap(),
                 ),
+                // Buckets and balls from the shared YOLO detector (object_detection.rs).
+                ("objects", rt.objects.telemetry(id.0, &runtime.run_id)),
                 (
                     "experiment/status",
                     serde_json::json!({"run_id":runtime.run_id,"schema_version":1,"run_elapsed":now,"utc":utc,"recording":runtime.recorder.as_ref().is_some_and(|r|!r.failed()),"runtime":runtime_status["runtime"]}),
