@@ -3,6 +3,7 @@ mod control_queue;
 mod cutscene;
 mod depth_camera;
 mod fpv;
+mod lobby;
 mod mason_field;
 mod menu;
 mod next_competition;

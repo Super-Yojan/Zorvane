@@ -18,7 +18,11 @@ impl Plugin for TerraWorldPlugin {
         self.config
             .validate()
             .expect("invalid Terra world configuration");
-        if menu {
+        // Start and Restart in the menu, and a host reset over Zenoh, rebuild the field.
+        if !menu {
+            app.add_systems(Startup, generate_world);
+        }
+        {
             app.add_systems(
                 Update,
                 (
@@ -31,8 +35,6 @@ impl Plugin for TerraWorldPlugin {
                     .chain()
                     .run_if(resource_exists::<crate::session::RebuildWorld>),
             );
-        } else {
-            app.add_systems(Startup, generate_world);
         }
         app.insert_resource(self.config.clone())
             .insert_resource(ClearColor(Color::srgb(0.65, 0.78, 0.88)))
@@ -159,13 +161,17 @@ fn generate_world(
     ));
 }
 
-/// Start, Restart: despawn the field and its rovers so the chain respawns them.
+/// Start, Restart, reset: despawn the field and its rovers so the chain respawns them.
+/// Rover ids restart at zero, so a player's seat and `--rover 0` survive a reset.
 fn apply_session(world: &mut World) {
-    let Some(session) = world.get_resource::<SimSession>().cloned() else {
-        return;
-    };
+    let count = world
+        .get_resource::<SimSession>()
+        .map(|session| session.rover_count);
     if let Some(mut fleet) = world.get_resource_mut::<crate::terra::RoverFleet>() {
-        let _ = fleet.set_count(session.rover_count);
+        if let Some(count) = count {
+            let _ = fleet.set_count(count);
+        }
+        fleet.restart_ids();
     }
     let mut query = world.query_filtered::<Entity, Or<(
         With<WorldElement>,
