@@ -254,7 +254,21 @@ impl Plugin for SimulatorBridgePlugin {
         self.config
             .validate()
             .expect("invalid Terra Zenoh configuration");
-        let shared = Arc::new(Shared::default());
+        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        match lobby.mode {
+            crate::lobby::Mode::Open => info!(
+                "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
+                lobby.host_key
+            ),
+            crate::lobby::Mode::Seated => info!(
+                "Zorvane multiplayer: seated, waiting in the lobby. Host key: {}",
+                lobby.host_key
+            ),
+        }
+        let shared = Arc::new(Shared {
+            lobby: Mutex::new(crate::lobby::Lobby::new(lobby)),
+            ..Shared::default()
+        });
         {
             let thread_shared = shared.clone();
             let config = self.config.clone();
@@ -278,7 +292,10 @@ impl Plugin for SimulatorBridgePlugin {
                 ),
             )
             .add_systems(FixedUpdate, drive_autonomy)
-            .add_systems(Update, (publish_frames, forward_next_commands, publish_next_state));
+            .add_systems(
+                Update,
+                (publish_frames, forward_next_commands, publish_next_state, run_lobby),
+            );
         if !app
             .world()
             .contains_resource::<Messages<crate::next_competition::NextCommand>>()
@@ -299,6 +316,8 @@ struct Outgoing {
     poses: BTreeMap<u64, Vec<u8>>,
     /// `<prefix>/next/score`, when a NEXT match is running.
     next_score: Option<Vec<u8>>,
+    /// `<prefix>/match/state`: seats, free rovers and the match phase.
+    match_state: Option<Vec<u8>>,
 }
 struct OccupancyPublication {
     payload: Vec<u8>,
@@ -356,33 +375,100 @@ struct Shared {
     fleet_request: Mutex<Option<usize>>,
     /// Dashboard LOAD and DUMP requests, by rover id.
     next_commands: Mutex<Vec<crate::next_competition::NextCommand>>,
+    /// Multiplayer seats and the match phase.
+    lobby: Mutex<crate::lobby::Lobby>,
+    /// `match/join` queries, answered by `run_lobby` once it knows the fleet.
+    joins: Mutex<Vec<zenoh::query::Query>>,
+    /// Signed `match/control` actions and seats that sent `match/leave`.
+    match_actions: Mutex<Vec<crate::lobby::MatchAction>>,
+    left_seats: Mutex<Vec<String>>,
+    /// Refusals already logged, so a misbehaving client logs once per kind.
+    refusals_logged: Mutex<std::collections::BTreeSet<String>>,
     outgoing: Mutex<Outgoing>,
     connected: AtomicBool,
     stop: AtomicBool,
 }
 impl Shared {
+    #[cfg(test)]
     fn receive(&self, prefix: &str, key: &str, bytes: &[u8]) {
+        self.receive_signed(prefix, key, bytes, None);
+    }
+
+    /// One command sample. `attachment` is the seat signature, if any.
+    fn receive_signed(&self, prefix: &str, key: &str, bytes: &[u8], attachment: Option<&[u8]>) {
         if bytes.len() > 2048 {
             return;
         }
-        if key == format!("{prefix}/fleet/size") {
-            if let Some(count) = decode_fleet_request(bytes) {
-                *self.fleet_request.lock().unwrap() = Some(count);
+        let Some(rest) = key.strip_prefix(&format!("{prefix}/")) else {
+            return;
+        };
+        let is_match = rest.starts_with("match/");
+        let id = rest
+            .split_once('/')
+            .and_then(|(id, _)| id.parse::<u64>().ok());
+        // Only commands are checked: state the simulator publishes comes back
+        // to its own subscriber and is ignored below.
+        if !is_match && rest != "fleet/size" {
+            let Some((Some(id), kind)) = rest.split_once('/').map(|(_, kind)| (id, kind)) else {
+                return;
+            };
+            if !is_command_kind(kind) || !self.commands.lock().unwrap().contains_key(&id) {
+                return;
+            }
+        }
+        let mut lobby = self.lobby.lock().unwrap();
+        let signer = match lobby.verify(key, bytes, attachment, Instant::now()) {
+            Ok(signer) => signer,
+            Err(refusal) => {
+                drop(lobby);
+                self.refuse(key, refusal);
+                return;
+            }
+        };
+        if rest == "fleet/size" {
+            match lobby.authorize_host(signer.as_deref()) {
+                Ok(()) => {
+                    if let Some(count) = decode_fleet_request(bytes) {
+                        *self.fleet_request.lock().unwrap() = Some(count);
+                    }
+                }
+                Err(refusal) => {
+                    drop(lobby);
+                    self.refuse(key, refusal);
+                }
             }
             return;
         }
-        let Some((id, kind)) = key
-            .strip_prefix(&format!("{prefix}/"))
-            .and_then(|rest| rest.split_once('/'))
-        else {
-            return;
-        };
-        let Ok(id) = id.parse::<u64>() else {
-            return;
-        };
-        if !self.commands.lock().unwrap().contains_key(&id) {
+        if is_match {
+            match (rest, signer) {
+                ("match/control", Some(signer)) if signer == crate::lobby::HOST_SEAT => {
+                    if let Ok(action) = serde_json::from_slice(bytes) {
+                        self.match_actions.lock().unwrap().push(action);
+                    }
+                }
+                ("match/leave", Some(seat)) => self.left_seats.lock().unwrap().push(seat),
+                // A verified signature already refreshed the seat.
+                ("match/heartbeat", Some(_)) => {}
+                ("match/control", _) => {
+                    drop(lobby);
+                    self.refuse(key, crate::lobby::Refusal::HostOnly);
+                }
+                _ => {}
+            }
             return;
         }
+        let Some((_, kind)) = rest.split_once('/') else {
+            return;
+        };
+        let id = id.expect("checked above");
+        let stop = kind == "safety"
+            && crate::control_queue::is_stop_request(bytes);
+        if let Err(refusal) = lobby.authorize(id, signer.as_deref(), stop) {
+            drop(lobby);
+            self.refuse(key, refusal);
+            return;
+        }
+        drop(lobby);
         if let Some(kind) = crate::next_competition::NextCommandKind::from_topic(kind) {
             self.next_commands
                 .lock()
@@ -390,22 +476,7 @@ impl Shared {
                 .push(crate::next_competition::NextCommand { rover: id, kind });
             return;
         }
-        if matches!(
-            kind,
-            "autonomy"
-                | "teleop"
-                | "safety"
-                | "goal"
-                | "goal/decision"
-                | "mission/report"
-                | "navigation/settings"
-                | "navigation/source"
-                | "navigation/resume"
-                | "hardware"
-                | "search"
-                | "search/action"
-                | "search/report/ack"
-        ) {
+        if is_command_kind(kind) {
             let mut actions = self.actions.lock().unwrap();
             crate::control_queue::enqueue_control_action(
                 actions.entry(id).or_default(),
@@ -413,6 +484,13 @@ impl Shared {
                 bytes.to_vec(),
                 Instant::now(),
             );
+        }
+    }
+
+    fn refuse(&self, key: &str, refusal: crate::lobby::Refusal) {
+        let note = format!("{key} {refusal:?}");
+        if self.refusals_logged.lock().unwrap().insert(note) {
+            warn!("Zorvane multiplayer: ignored {key}: {refusal:?} (logged once)");
         }
     }
 
@@ -431,6 +509,26 @@ impl Shared {
         *self.fleet_request.lock().unwrap() = None;
         *self.outgoing.lock().unwrap() = Outgoing::default();
     }
+}
+/// Rover command topics: the Terra control contract plus NEXT load and dump.
+fn is_command_kind(kind: &str) -> bool {
+    crate::next_competition::NextCommandKind::from_topic(kind).is_some()
+        || matches!(
+            kind,
+            "autonomy"
+                | "teleop"
+                | "safety"
+                | "goal"
+                | "goal/decision"
+                | "mission/report"
+                | "navigation/settings"
+                | "navigation/source"
+                | "navigation/resume"
+                | "hardware"
+                | "search"
+                | "search/action"
+                | "search/report/ack"
+        )
 }
 #[derive(Resource)]
 struct Bridge {
@@ -485,6 +583,107 @@ fn publish_next_state(
     if let Some(score) = score {
         let score = crate::next_competition::score_json(*score);
         outgoing.next_score = Some(serde_json::to_vec(&score).unwrap());
+    }
+}
+/// Seats joining players, frees idle seats, applies host actions and publishes
+/// `match/state` once a second and on every change.
+fn run_lobby(
+    bridge: Res<Bridge>,
+    mut commands: Commands,
+    mut session: Option<ResMut<crate::session::SimSession>>,
+    mut clock: Option<ResMut<Time<Virtual>>>,
+    rovers: Query<(&RoverId, &crate::terra::RoverSlot), With<Rover>>,
+    mut last_publish: Local<Option<Instant>>,
+) {
+    use crate::lobby::{MatchAction, Team};
+    use crate::next_competition::Alliance;
+    let now = Instant::now();
+    let mut fleet: Vec<(u64, Team)> = rovers
+        .iter()
+        .map(|(id, slot)| {
+            let team = match Alliance::of_slot(slot.0) {
+                Alliance::Red => Team::Red,
+                Alliance::Blue => Team::Blue,
+            };
+            (id.0, team)
+        })
+        .collect();
+    fleet.sort_by_key(|(id, _)| *id);
+    let shared = &bridge.shared;
+    let joins = std::mem::take(&mut *shared.joins.lock().unwrap());
+    let actions = std::mem::take(&mut *shared.match_actions.lock().unwrap());
+    let left = std::mem::take(&mut *shared.left_seats.lock().unwrap());
+    let mut changed = !joins.is_empty() || !actions.is_empty() || !left.is_empty();
+    let mut freed = Vec::new();
+    {
+        let mut lobby = shared.lobby.lock().unwrap();
+        for query in joins {
+            let body = query.payload().map(|bytes| bytes.to_bytes().into_owned()).unwrap_or_default();
+            let reply = match lobby.join(&body, &fleet, now) {
+                Ok(reply) => {
+                    info!("Zorvane multiplayer: {} joined as seat {}", reply["rovers"], reply["seat"]);
+                    reply
+                }
+                Err(error) => serde_json::json!({"ok": false, "error": error}),
+            };
+            let key = query.key_expr().clone();
+            if let Err(error) = query.reply(key, serde_json::to_vec(&reply).unwrap()).wait() {
+                warn!("Zorvane multiplayer: join reply failed: {error}");
+            }
+        }
+        for seat in &left {
+            freed.extend(lobby.leave(seat));
+        }
+        let expired = lobby.expire(now);
+        changed |= !expired.is_empty();
+        freed.extend(expired);
+        for action in actions {
+            freed.extend(lobby.apply(action, now));
+            info!("Zorvane multiplayer: host {action:?}");
+            let playing = match action {
+                MatchAction::Pause => Some(false),
+                MatchAction::Start | MatchAction::Resume | MatchAction::Reset => Some(true),
+                MatchAction::Kick => None,
+            };
+            if matches!(action, MatchAction::Reset)
+                || (matches!(action, MatchAction::Start)
+                    && session
+                        .as_ref()
+                        .is_some_and(|s| s.phase == crate::session::Phase::Menu))
+            {
+                commands.insert_resource(crate::session::RebuildWorld);
+            }
+            if let Some(playing) = playing {
+                if let Some(session) = session.as_mut() {
+                    session.phase = if playing {
+                        crate::session::Phase::Playing
+                    } else {
+                        crate::session::Phase::Paused
+                    };
+                    session.ui_epoch = session.ui_epoch.wrapping_add(1);
+                } else if let Some(clock) = clock.as_mut() {
+                    if playing { clock.unpause() } else { clock.pause() }
+                }
+            }
+        }
+        let due = last_publish.is_none_or(|last| now - last >= Duration::from_secs(1));
+        if changed || due {
+            *last_publish = Some(now);
+            let state = lobby.state_json(&fleet, now);
+            shared.outgoing.lock().unwrap().match_state = Some(serde_json::to_vec(&state).unwrap());
+        }
+    }
+    // A freed rover drops its latched goal; its teleop lease runs out by itself.
+    if !freed.is_empty() {
+        let mut queues = shared.actions.lock().unwrap();
+        for id in freed {
+            crate::control_queue::enqueue_control_action(
+                queues.entry(id).or_default(),
+                "goal".into(),
+                br#"{"cancel":true}"#.to_vec(),
+                now,
+            );
+        }
     }
 }
 fn receive_fleet_request(bridge: Res<Bridge>, fleet: Option<ResMut<RoverFleet>>) {
@@ -1534,7 +1733,21 @@ mod tests {
     #[test]
     fn drive_commands_are_isolated_between_rovers() {
         let mut app = App::new();
-        let shared = Arc::new(Shared::default());
+        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        match lobby.mode {
+            crate::lobby::Mode::Open => info!(
+                "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
+                lobby.host_key
+            ),
+            crate::lobby::Mode::Seated => info!(
+                "Zorvane multiplayer: seated, waiting in the lobby. Host key: {}",
+                lobby.host_key
+            ),
+        }
+        let shared = Arc::new(Shared {
+            lobby: Mutex::new(crate::lobby::Lobby::new(lobby)),
+            ..Shared::default()
+        });
         shared.connected.store(true, Ordering::Release);
         shared.commands.lock().unwrap().insert(
             0,
@@ -1573,7 +1786,21 @@ mod tests {
     }
     #[test]
     fn waypoint_goal_drives_north_and_publishes_status() {
-        let shared = Arc::new(Shared::default());
+        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        match lobby.mode {
+            crate::lobby::Mode::Open => info!(
+                "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
+                lobby.host_key
+            ),
+            crate::lobby::Mode::Seated => info!(
+                "Zorvane multiplayer: seated, waiting in the lobby. Host key: {}",
+                lobby.host_key
+            ),
+        }
+        let shared = Arc::new(Shared {
+            lobby: Mutex::new(crate::lobby::Lobby::new(lobby)),
+            ..Shared::default()
+        });
         shared.connected.store(true, Ordering::Release);
         shared.commands.lock().unwrap().insert(0, None);
         shared.goals.lock().unwrap().insert(
@@ -1635,7 +1862,21 @@ mod tests {
         ] {
             assert!(decode_fleet_request(input).is_none());
         }
-        let shared = Arc::new(Shared::default());
+        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        match lobby.mode {
+            crate::lobby::Mode::Open => info!(
+                "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
+                lobby.host_key
+            ),
+            crate::lobby::Mode::Seated => info!(
+                "Zorvane multiplayer: seated, waiting in the lobby. Host key: {}",
+                lobby.host_key
+            ),
+        }
+        let shared = Arc::new(Shared {
+            lobby: Mutex::new(crate::lobby::Lobby::new(lobby)),
+            ..Shared::default()
+        });
         *shared.fleet_request.lock().unwrap() = Some(3);
         let mut app = App::new();
         app.insert_resource(Bridge { shared })
@@ -2374,7 +2615,21 @@ mod autonomy_integration_tests {
     use super::*;
     #[test]
     fn settings_observe_the_preceding_motor_output() {
-        let shared = Arc::new(Shared::default());
+        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        match lobby.mode {
+            crate::lobby::Mode::Open => info!(
+                "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
+                lobby.host_key
+            ),
+            crate::lobby::Mode::Seated => info!(
+                "Zorvane multiplayer: seated, waiting in the lobby. Host key: {}",
+                lobby.host_key
+            ),
+        }
+        let shared = Arc::new(Shared {
+            lobby: Mutex::new(crate::lobby::Lobby::new(lobby)),
+            ..Shared::default()
+        });
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .insert_resource(Bridge {
@@ -2410,7 +2665,21 @@ mod autonomy_integration_tests {
     }
     #[test]
     fn runtime_selects_teleop_and_latches_stop_per_rover() {
-        let shared = Arc::new(Shared::default());
+        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        match lobby.mode {
+            crate::lobby::Mode::Open => info!(
+                "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
+                lobby.host_key
+            ),
+            crate::lobby::Mode::Seated => info!(
+                "Zorvane multiplayer: seated, waiting in the lobby. Host key: {}",
+                lobby.host_key
+            ),
+        }
+        let shared = Arc::new(Shared {
+            lobby: Mutex::new(crate::lobby::Lobby::new(lobby)),
+            ..Shared::default()
+        });
         shared.connected.store(true, Ordering::Release);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -2513,7 +2782,21 @@ mod autonomy_integration_tests {
 
     #[test]
     fn a_bound_reset_clears_an_emergency_stop_and_teleop_drives_again() {
-        let shared = Arc::new(Shared::default());
+        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        match lobby.mode {
+            crate::lobby::Mode::Open => info!(
+                "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
+                lobby.host_key
+            ),
+            crate::lobby::Mode::Seated => info!(
+                "Zorvane multiplayer: seated, waiting in the lobby. Host key: {}",
+                lobby.host_key
+            ),
+        }
+        let shared = Arc::new(Shared {
+            lobby: Mutex::new(crate::lobby::Lobby::new(lobby)),
+            ..Shared::default()
+        });
         shared.connected.store(true, Ordering::Release);
         shared.commands.lock().unwrap().insert(1, None);
         let mut app = App::new();
@@ -2592,7 +2875,21 @@ mod autonomy_integration_tests {
 
     #[test]
     fn hardware_disarm_holds_motion_until_a_fresh_arm() {
-        let shared = Arc::new(Shared::default());
+        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        match lobby.mode {
+            crate::lobby::Mode::Open => info!(
+                "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
+                lobby.host_key
+            ),
+            crate::lobby::Mode::Seated => info!(
+                "Zorvane multiplayer: seated, waiting in the lobby. Host key: {}",
+                lobby.host_key
+            ),
+        }
+        let shared = Arc::new(Shared {
+            lobby: Mutex::new(crate::lobby::Lobby::new(lobby)),
+            ..Shared::default()
+        });
         shared.connected.store(true, Ordering::Release);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)

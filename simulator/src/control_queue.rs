@@ -61,6 +61,11 @@ fn stop_token<T>(a: &ControlAction<T>) -> Option<String> {
     .then(|| token.into())
 }
 
+/// A `safety` payload that is an emergency stop.
+pub fn is_stop_request(payload: &[u8]) -> bool {
+    stop_token(&("safety".to_owned(), payload.to_vec(), ())).is_some()
+}
+
 fn is_stop<T>(a: &ControlAction<T>) -> bool {
     stop_token(a).is_some()
 }
