@@ -67,6 +67,7 @@ You can also set them in the environment before you start `zorvane`; the menu th
 | `ZORVANE_SPECTATOR=1` | Start in free camera mode with keyboard driving off, for watching agents or remote players |
 | `ZORVANE_FPV=0` | Turn FPV video off |
 | `ZORVANE_OBJECTS=0` | Turn off bucket and ball detection (one shared YOLO model for all rovers) |
+| `ZORVANE_RGB_PREVIEW=1` | Show rover 0's front RGB camera in the lower-left corner |
 | `TERRA_HEADLESS=1` | No window |
 
 ```sh

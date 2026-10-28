@@ -423,6 +423,9 @@ impl RoverBallLoad {
     pub fn needs_operator(self) -> bool {
         self.waiting > 0 || self.dumper > 0
     }
+    pub fn can_load_dumper(self) -> bool {
+        self.waiting > 0 && self.dumper < DUMPER_CAPACITY
+    }
     fn pickup(&mut self) -> bool {
         if self.count() >= ROVER_BALL_CAPACITY {
             return false;
@@ -431,7 +434,9 @@ impl RoverBallLoad {
         true
     }
     pub fn state_label(self) -> &'static str {
-        if self.needs_operator() {
+        if self.dumper > 0 && !self.can_load_dumper() {
+            "DUMPER LOADED: GO DUMP"
+        } else if self.can_load_dumper() {
             "WAITING FOR OPERATOR"
         } else if self.count() >= ROVER_BALL_CAPACITY {
             "FULL: RETURN TO GOAL"
@@ -1452,7 +1457,7 @@ pub fn status_json(slot: usize, load: RoverBallLoad, dump_ready: bool) -> serde_
         "dumper": load.dumper,
         "capacity": ROVER_BALL_CAPACITY,
         "dumper_capacity": DUMPER_CAPACITY,
-        "can_load": load.waiting > 0 && load.dumper < DUMPER_CAPACITY,
+        "can_load": load.can_load_dumper(),
         "can_dump": dump_ready,
     })
 }
@@ -1735,7 +1740,7 @@ fn sync_waiting_markers(
     rovers: Query<(Entity, &RoverBallLoad, Option<&WaitingMarker>), With<crate::terra::Rover>>,
 ) {
     for (rover, load, marker) in &rovers {
-        match (load.needs_operator(), marker) {
+        match (load.can_load_dumper(), marker) {
             (true, None) => {
                 let (mesh, material) = marker_assets.get_or_insert_with(|| {
                     (
@@ -1898,7 +1903,7 @@ fn update_score_hud(
                             padding: UiRect::all(Val::Px(6.0)),
                             ..default()
                         },
-                        BackgroundColor(if load.needs_operator() {
+                        BackgroundColor(if load.can_load_dumper() || *can_dump {
                             Color::srgb(0.78, 0.31, 0.03)
                         } else {
                             Color::srgb(0.16, 0.20, 0.22)
@@ -2084,9 +2089,10 @@ mod tests {
         first.queue_at_goal();
         assert_eq!(first.state_label(), "WAITING FOR OPERATOR");
         assert_eq!((first.collected, first.waiting, first.dumper), (0, 3, 0));
-        for _ in 0..DUMPER_CAPACITY {
-            assert!(first.load_dumper());
-        }
+        assert!(first.load_dumper());
+        assert_eq!(first.state_label(), "WAITING FOR OPERATOR");
+        assert!(first.load_dumper());
+        assert_eq!(first.state_label(), "DUMPER LOADED: GO DUMP");
         assert!(!first.load_dumper());
         assert_eq!(
             (first.waiting, first.dumper, first.count()),
@@ -2094,11 +2100,11 @@ mod tests {
         );
         assert_eq!(first.dump(), DUMPER_CAPACITY);
         assert_eq!(first.count(), 3 - DUMPER_CAPACITY);
+        assert_eq!(first.state_label(), "WAITING FOR OPERATOR");
         assert_eq!(first.dump(), 0);
-        for _ in DUMPER_CAPACITY..3 {
-            assert!(first.load_dumper());
-            assert_eq!(first.dump(), 1);
-        }
+        assert!(first.load_dumper());
+        assert_eq!(first.state_label(), "DUMPER LOADED: GO DUMP");
+        assert_eq!(first.dump(), 1);
         assert_eq!((first.count(), second.count()), (0, 1));
         assert_eq!(first.state_label(), "SEARCHING");
         assert!(first.pickup()); // Normal collection resumes after the final click.

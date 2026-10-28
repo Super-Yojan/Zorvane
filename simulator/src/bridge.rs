@@ -1884,6 +1884,7 @@ mod tests {
                 RoverId(0),
                 crate::rgb_camera::RgbCamera {
                     config: camera_config,
+                    target: default(),
                 },
                 RgbFrame {
                     width: 2,

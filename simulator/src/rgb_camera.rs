@@ -13,14 +13,31 @@ use bevy::{
 pub struct TerraRgbCameraPlugin;
 impl Plugin for TerraRgbCameraPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, mount_rgb_cameras);
+        app.insert_resource(RgbPreviewConfig {
+            enabled: std::env::var("ZORVANE_RGB_PREVIEW")
+                .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true")),
+        })
+        .add_systems(
+            Update,
+            (
+                mount_rgb_cameras,
+                sync_rgb_previews.after(mount_rgb_cameras),
+            ),
+        );
     }
+}
+#[derive(Resource)]
+struct RgbPreviewConfig {
+    enabled: bool,
 }
 #[derive(Component)]
 struct RgbMounted;
 #[derive(Component)]
+struct RgbPreview(Entity);
+#[derive(Component)]
 pub struct RgbCamera {
     pub config: DepthCameraConfig,
+    pub target: Handle<Image>,
 }
 #[derive(Component, Default)]
 pub struct RgbFrame {
@@ -59,6 +76,7 @@ fn mount_rgb_cameras(
                 *id,
                 RgbCamera {
                     config: config.clone(),
+                    target: target.clone(),
                 },
                 RgbFrame {
                     width: config.resolution.x,
@@ -85,6 +103,64 @@ fn mount_rgb_cameras(
                 Readback::texture(target),
             ))
             .observe(receive_rgb);
+    }
+}
+
+fn sync_rgb_previews(
+    mut commands: Commands,
+    config: Res<RgbPreviewConfig>,
+    cameras: Query<(Entity, &RgbCamera, &crate::terra::RoverId)>,
+    previews: Query<(Entity, &RgbPreview)>,
+) {
+    for (entity, preview) in &previews {
+        if !config.enabled || cameras.get(preview.0).is_err() {
+            commands.entity(entity).despawn();
+        }
+    }
+    if !config.enabled {
+        return;
+    }
+    for (camera_entity, camera, id) in &cameras {
+        if id.0 != 0
+            || previews
+                .iter()
+                .any(|(_, preview)| preview.0 == camera_entity)
+        {
+            continue;
+        }
+        commands
+            .spawn((
+                Name::new("Front RGB preview"),
+                RgbPreview(camera_entity),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: px(16.0),
+                    bottom: px(16.0),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::all(px(8.0)),
+                    row_gap: px(6.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.02, 0.02, 0.02, 0.9)),
+            ))
+            .with_children(|parent| {
+                parent.spawn((
+                    Text::new("Front RGB · rover 0"),
+                    TextFont {
+                        font_size: FontSize::Px(14.0),
+                        ..default()
+                    },
+                ));
+                parent.spawn((
+                    ImageNode::new(camera.target.clone()),
+                    Node {
+                        width: px(256.0),
+                        height: px(256.0 * camera.config.resolution.y as f32
+                            / camera.config.resolution.x as f32),
+                        ..default()
+                    },
+                ));
+            });
     }
 }
 pub(crate) fn strip_padding(data: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
@@ -119,6 +195,34 @@ fn receive_rgb(
     if frame.received_at - frame.last_observation >= crate::observation_capture::evidence_period() {
         crate::observation_capture::capture_rgb(id.0, &frame);
         frame.last_observation = frame.received_at;
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn rgb_preview_follows_flag() {
+        let mut app = App::new();
+        app.insert_resource(RgbPreviewConfig { enabled: true })
+            .add_systems(Update, sync_rgb_previews);
+        app.world_mut().spawn((
+            RgbCamera {
+                config: DepthCameraConfig::default(),
+                target: default(),
+            },
+            crate::terra::RoverId(0),
+        ));
+        let count = |app: &mut App| {
+            let mut query = app.world_mut().query::<&RgbPreview>();
+            query.iter(app.world()).count()
+        };
+        app.update();
+        assert_eq!(count(&mut app), 1);
+        app.world_mut().resource_mut::<RgbPreviewConfig>().enabled = false;
+        app.update();
+        assert_eq!(count(&mut app), 0);
     }
 }
 #[cfg(test)]
