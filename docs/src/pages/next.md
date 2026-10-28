@@ -26,7 +26,7 @@ Launching is not modeled, so the raised buckets (3 and 6 points) are out of reac
 
 1. **Collect.** Drive over balls. CrabTrapBot's intake holds 8; at capacity the flaps close and further balls stay on the field.
 2. **Return.** Drive back to the goal line you started on. Within 1 m of it, collected balls become *waiting*.
-3. **Load.** Publish `next/load`, or click **LOAD 1 INTO DUMPER**, once per ball. The dumper holds 2.
+3. **Load.** Publish `next/load`, or click **LOAD 1 INTO DUMPER**, once per ball, while the rover is still at its goal. The dumper holds 2.
 4. **Park.** Drive into the other half and park with the outlet over one of your alliance's ground buckets. `next/status` reports `can_dump` once it is.
 5. **Dump.** Publish `next/dump`, or click **DUMP**. The balls fall for real, and only the ones that land in the bucket score.
 

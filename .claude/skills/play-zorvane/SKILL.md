@@ -55,9 +55,10 @@ a real match ([session-report.md](session-report.md): Red 12, Blue 0).
   and within 1 m of your goal line (x = -50 for Red, +50 for Blue). Anywhere
   else on the goal line does nothing. See `at_home_goal` in
   `simulator/src/next_competition.rs`.
-- **Loading works anywhere.** Once balls are `waiting`, `load_ball` works even
-  when you're parked at a bucket. Bank a full intake once, drive to the bucket,
-  then repeat `load_ball` ×2 → `dump` without going back to the goal.
+- **Loading only works at the home goal.** `load_ball` needs the rover inside
+  its goal mouth (`at_home_goal` in `next/status`). The dumper holds 2, so each
+  bucket trip scores at most 2 balls; balls still `waiting` after a dump need
+  another trip back to the goal.
 - **Dump alignment is tight.** `can_dump` needs the outlet within **9 cm** of
   the bucket centre while facing it. The outlet sits 0.61 m ahead of the rover
   centre. `approach_bucket(id)` does the drive and the creep; if it ends with
@@ -105,10 +106,10 @@ Use `look` to aim at balls and to check a path is clear. With the detector off
 1. Sweep your own penalty box with `drive` (about 0.8–1 m/s, `look` every
    3–4 s) until `collected` is 8. Steer clear of buckets (`get_objects`).
 2. Reverse-turn to face the goal mouth, enter at |y| < 3 and check that
-   `waiting` went up. Load 2.
+   `waiting` went up. Load 2 before leaving.
 3. Reverse out, turn north, `go_to` (0, 0) then (33, 10), and arc until
    `get_objects(kind="bucket")` lists one with `yours: true` and
    `points_per_ball: 2`.
-4. `approach_bucket(id)`, then repeat `dump` → `load_ball` ×2 → `dump` until
-   `waiting` is 0. The bucket doesn't move, so later trips go straight back
-   with `approach_bucket` on the same id.
+4. `approach_bucket(id)`, then `dump`. Drive back to the goal mouth, load 2
+   more and return until `waiting` is 0. The bucket doesn't move, so later
+   trips go straight back with `approach_bucket` on the same id.

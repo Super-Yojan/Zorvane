@@ -241,7 +241,8 @@ fleet/state:
 <id>/next/status:
   {schema_version:1, alliance:"red"|"blue", target_bucket:"orange"|"blue",
    state:string, collected:int, waiting:int, dumper:int, capacity:int,
-   dumper_capacity:int, can_load:boolean, can_dump:boolean}
+   dumper_capacity:int, at_home_goal:boolean, can_load:boolean,
+   can_dump:boolean}
 
 next/score:
   {schema_version:1, red:int, blue:int}

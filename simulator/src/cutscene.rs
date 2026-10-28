@@ -8,7 +8,7 @@
 //! runs and `ZORVANE_CUTSCENE=0` never play it.
 
 use crate::next_competition::{
-    BUCKETS_PER_HALF, PENALTY_AREA_DEPTH, PITCH_SOUTH, TennisBall, bucket_seed, buckets,
+    BUCKETS_PER_HALF, Bucket, PENALTY_AREA_DEPTH, PITCH_SOUTH, bucket_seed, buckets,
 };
 use crate::world::{WorldCamera, WorldConfig};
 use bevy::prelude::*;
@@ -190,11 +190,12 @@ pub fn install(app: &mut App) {
 }
 
 /// Starts each time a NEXT field is spawned (startup, Restart, Load world).
+/// Buckets mark a new field: DUMP spawns new balls mid-match, so balls do not.
 fn start(
     mut commands: Commands,
     script: Res<IntroScript>,
     config: Option<Res<WorldConfig>>,
-    new_field: Query<(), Added<TennisBall>>,
+    new_field: Query<(), Added<Bucket>>,
     cameras: Query<(), With<WorldCamera>>,
     playing: Option<Res<Playing>>,
 ) {
@@ -349,6 +350,22 @@ fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dumped_balls_do_not_replay_the_intro_but_a_new_field_does() {
+        let mut app = App::new();
+        app.insert_resource(IntroScript(serde_json::from_str(SCRIPT).unwrap()))
+            .insert_resource(WorldConfig::default())
+            .add_systems(Update, start);
+        app.world_mut().spawn(WorldCamera);
+        app.world_mut().spawn(crate::next_competition::TennisBall);
+        app.update();
+        assert!(app.world().get_resource::<Playing>().is_none());
+        app.world_mut()
+            .spawn(crate::next_competition::BucketPlace::open(0.0, -10.0).volume());
+        app.update();
+        assert!(app.world().get_resource::<Playing>().is_some());
+    }
 
     #[test]
     fn script_parses_and_every_beat_has_a_clip_and_a_shot() {
