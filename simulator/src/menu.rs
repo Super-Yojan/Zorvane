@@ -1,6 +1,9 @@
 //! Start screen and pause menu. Escape or the corner button pauses a running world.
+//! The start screen also offers the command-line options (see `settings`); the
+//! pause menu offers the match ones, which Restart applies.
 
 use crate::session::{Phase, RebuildWorld, SimSession, menu_rover_max};
+use crate::settings::{Applies, MenuSettings};
 use bevy::prelude::*;
 
 pub struct MenuPlugin;
@@ -8,6 +11,9 @@ pub struct MenuPlugin;
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         crate::online_menu::install(app);
+        if !app.world().contains_resource::<MenuSettings>() {
+            app.insert_resource(MenuSettings::from_env());
+        }
         app.add_systems(Startup, spawn_ui_camera).add_systems(
             Update,
             (
@@ -41,6 +47,9 @@ struct PauseButton;
 pub(crate) struct RoverStep(pub i32);
 #[derive(Component)]
 struct PreviewToggle;
+/// Cycles `MenuSettings::options[i]`.
+#[derive(Component)]
+struct SettingButton(usize);
 
 fn spawn_ui_camera(mut commands: Commands) {
     commands.spawn((
@@ -78,9 +87,31 @@ fn sync_clock(session: Res<SimSession>, mut time: ResMut<Time<Virtual>>) {
     }
 }
 
+/// Match choices take effect for the field that is about to be built.
+pub(crate) fn apply_match_settings(
+    commands: &mut Commands,
+    settings: &MenuSettings,
+    lighting: Option<&mut crate::mason_field::Lighting>,
+) {
+    settings.apply_match();
+    if let Some(camera) = settings.get("TERRA_NEXT_CAMERA") {
+        commands.insert_resource(crate::spectator::SpectatorCamera::from_setting(
+            camera.value(),
+        ));
+    }
+    if let Some(lighting) = lighting {
+        *lighting = crate::mason_field::Lighting::from_env().unwrap_or_default();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn clicks(
     mut commands: Commands,
     mut session: ResMut<SimSession>,
+    mut settings: ResMut<MenuSettings>,
+    mut lighting: Option<ResMut<crate::mason_field::Lighting>>,
+    mut exit: MessageWriter<AppExit>,
+    options: Query<(&Interaction, &SettingButton), Changed<Interaction>>,
     mut fleet: Option<ResMut<crate::terra::RoverFleet>>,
     start: Query<&Interaction, (Changed<Interaction>, With<StartButton>)>,
     resume: Query<&Interaction, (Changed<Interaction>, With<ResumeButton>)>,
@@ -91,6 +122,14 @@ fn clicks(
     steps: Query<(&Interaction, &RoverStep), Changed<Interaction>>,
 ) {
     let pressed = |interaction: &Interaction| *interaction == Interaction::Pressed;
+    for (interaction, button) in &options {
+        if pressed(interaction)
+            && let Some(option) = settings.options.get_mut(button.0)
+        {
+            option.cycle();
+            session.ui_epoch = session.ui_epoch.wrapping_add(1);
+        }
+    }
     for (interaction, step) in &steps {
         if !pressed(interaction) {
             continue;
@@ -108,11 +147,26 @@ fn clicks(
         session.ui_epoch = session.ui_epoch.wrapping_add(1);
     }
     if start.iter().any(pressed) && session.phase == Phase::Menu {
+        if settings.needs_relaunch() {
+            // Vehicle, network and detectors are read once at launch.
+            match crate::settings::relaunch(&settings, session.rover_count) {
+                Ok(()) => {
+                    exit.write(AppExit::Success);
+                    return;
+                }
+                Err(error) => eprintln!(
+                    "Zorvane: could not relaunch with the new settings ({error}); \
+                     starting with this run's"
+                ),
+            }
+        }
+        apply_match_settings(&mut commands, &settings, lighting.as_deref_mut());
         session.phase = Phase::Playing;
         session.ui_epoch = session.ui_epoch.wrapping_add(1);
         commands.insert_resource(RebuildWorld);
     }
     if restart.iter().any(pressed) {
+        apply_match_settings(&mut commands, &settings, lighting.as_deref_mut());
         session.phase = Phase::Playing;
         session.ui_epoch = session.ui_epoch.wrapping_add(1);
         commands.insert_resource(RebuildWorld);
@@ -135,6 +189,7 @@ fn rebuild_ui(
     session: Res<SimSession>,
     online: Res<crate::online_menu::OnlineMenu>,
     bridge: Option<Res<crate::bridge::Bridge>>,
+    settings: Res<MenuSettings>,
     depth: Option<Res<crate::depth_camera::DepthCameraConfig>>,
     roots: Query<Entity, With<MenuRoot>>,
     mut built: Local<(u32, u32)>,
@@ -164,8 +219,8 @@ fn rebuild_ui(
                 crate::online_menu::spawn_screen(panel, &online, session.rover_count)
             });
         }
-        Phase::Menu => spawn_panel(&mut commands, &session, false, preview_on, hosting),
-        Phase::Paused => spawn_panel(&mut commands, &session, true, preview_on, hosting),
+        Phase::Menu => spawn_panel(&mut commands, &session, &settings, false, preview_on, hosting),
+        Phase::Paused => spawn_panel(&mut commands, &session, &settings, true, preview_on, hosting),
         Phase::Online => {
             spawn_card(&mut commands, |panel| {
                 crate::online_menu::spawn_joined(panel, &online)
@@ -237,10 +292,12 @@ fn spawn_pause_chip(commands: &mut Commands) {
 fn spawn_panel(
     commands: &mut Commands,
     session: &SimSession,
+    settings: &MenuSettings,
     paused: bool,
     preview_on: bool,
     hosting: bool,
 ) {
+    let muted = Color::srgb(0.62, 0.68, 0.70);
     commands
         .spawn((
             MenuRoot,
@@ -256,12 +313,15 @@ fn spawn_panel(
             parent
                 .spawn((
                     Node {
-                        width: Val::Px(420.0),
+                        width: Val::Px(if paused { 440.0 } else { 820.0 }),
+                        max_width: Val::Percent(96.0),
+                        max_height: Val::Percent(96.0),
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Stretch,
-                        padding: UiRect::all(Val::Px(24.0)),
+                        padding: UiRect::all(Val::Px(20.0)),
                         row_gap: Val::Px(8.0),
                         border_radius: BorderRadius::all(Val::Px(12.0)),
+                        overflow: Overflow::scroll_y(),
                         ..default()
                     },
                     BackgroundColor(Color::srgb(0.16, 0.18, 0.20)),
@@ -270,34 +330,67 @@ fn spawn_panel(
                     label(
                         panel,
                         if paused { "Paused" } else { "NEXT Competition" },
-                        32.0,
+                        30.0,
                         Color::WHITE,
                     );
                     label(
                         panel,
-                        "Field 3, West Campus. Esc pauses.",
-                        16.0,
+                        "Field 3, West Campus. Esc pauses. Click an option to change it.",
+                        15.0,
                         Color::srgb(0.75, 0.78, 0.80),
                     );
-                    label(panel, "Rovers", 14.0, Color::srgb(0.62, 0.68, 0.70));
                     panel
                         .spawn(Node {
-                            justify_content: JustifyContent::SpaceBetween,
-                            align_items: AlignItems::Center,
-                            column_gap: Val::Px(8.0),
+                            column_gap: Val::Px(24.0),
+                            align_items: AlignItems::FlexStart,
                             ..default()
                         })
-                        .with_children(|row| {
-                            button(row, "-", RoverStep(-1), false);
-                            label(row, &format!("{}", session.rover_count), 22.0, Color::WHITE);
-                            button(row, "+", RoverStep(1), false);
+                        .with_children(|columns| {
+                            columns.spawn(column()).with_children(|col| {
+                                label(col, "Match", 18.0, Color::WHITE);
+                                option_row(col, "Rovers", |row| {
+                                    row.spawn(Node {
+                                        align_items: AlignItems::Center,
+                                        column_gap: Val::Px(10.0),
+                                        ..default()
+                                    })
+                                    .with_children(|stepper| {
+                                        small_button(stepper, "-", RoverStep(-1), false);
+                                        label(
+                                            stepper,
+                                            &format!("{}", session.rover_count),
+                                            20.0,
+                                            Color::WHITE,
+                                        );
+                                        small_button(stepper, "+", RoverStep(1), false);
+                                    });
+                                });
+                                setting_rows(col, settings, Applies::Match);
+                                option_row(col, "Depth preview", |row| {
+                                    small_button(
+                                        row,
+                                        if preview_on { "On" } else { "Off" },
+                                        PreviewToggle,
+                                        false,
+                                    );
+                                });
+                                if paused {
+                                    label(col, "Restart applies match changes.", 13.0, muted);
+                                }
+                            });
+                            if !paused {
+                                columns.spawn(column()).with_children(|col| {
+                                    label(col, "Simulator and network", 18.0, Color::WHITE);
+                                    setting_rows(col, settings, Applies::Startup);
+                                    label(
+                                        col,
+                                        "Changes here (marked *) restart Zorvane when you press Start.",
+                                        13.0,
+                                        muted,
+                                    );
+                                });
+                            }
                         });
-                    button(
-                        panel,
-                        &format!("Depth preview: {}", if preview_on { "on" } else { "off" }),
-                        PreviewToggle,
-                        false,
-                    );
                     if paused {
                         panel
                             .spawn(Node {
@@ -317,7 +410,11 @@ fn spawn_panel(
                                 }
                             });
                     } else {
-                        button(panel, "Start", StartButton, true);
+                        if settings.needs_relaunch() {
+                            button(panel, "Restart Zorvane and start", StartButton, true);
+                        } else {
+                            button(panel, "Start", StartButton, true);
+                        }
                         button(
                             panel,
                             "Play online",
@@ -326,6 +423,91 @@ fn spawn_panel(
                         );
                     }
                 });
+        });
+}
+
+fn column() -> Node {
+    Node {
+        flex_grow: 1.0,
+        flex_basis: Val::Px(0.0),
+        flex_direction: FlexDirection::Column,
+        row_gap: Val::Px(6.0),
+        ..default()
+    }
+}
+
+/// A label on the left, a control on the right.
+fn option_row(
+    parent: &mut ChildSpawnerCommands,
+    text: &str,
+    control: impl FnOnce(&mut ChildSpawnerCommands),
+) {
+    parent
+        .spawn(Node {
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(12.0),
+            min_height: Val::Px(34.0),
+            ..default()
+        })
+        .with_children(|row| {
+            label(row, text, 15.0, Color::srgb(0.80, 0.84, 0.86));
+            control(row);
+        });
+}
+
+fn setting_rows(parent: &mut ChildSpawnerCommands, settings: &MenuSettings, applies: Applies) {
+    for (index, option) in settings.options.iter().enumerate() {
+        if option.applies != applies {
+            continue;
+        }
+        let marked = applies == Applies::Startup && option.changed();
+        let text = if marked {
+            format!("{} *", option.shown())
+        } else {
+            option.shown().to_owned()
+        };
+        option_row(parent, option.label, |row| {
+            small_button(row, &text, SettingButton(index), marked);
+        });
+    }
+}
+
+fn small_button<T: Component>(
+    parent: &mut ChildSpawnerCommands,
+    text: &str,
+    marker: T,
+    selected: bool,
+) {
+    let color = if selected {
+        Color::srgb(0.45, 0.33, 0.10)
+    } else {
+        Color::srgb(0.24, 0.27, 0.30)
+    };
+    parent
+        .spawn((
+            Button,
+            marker,
+            Node {
+                min_height: Val::Px(30.0),
+                min_width: Val::Px(36.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                padding: UiRect::horizontal(Val::Px(12.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                ..default()
+            },
+            BackgroundColor(color),
+        ))
+        .with_children(|button| {
+            button.spawn((
+                Text::new(text),
+                TextFont {
+                    font_size: FontSize::Px(15.0),
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
         });
 }
 
@@ -401,6 +583,25 @@ mod tests {
             .init_resource::<Time<Virtual>>()
             .add_plugins(MenuPlugin);
         app.update();
+        let world = app.world_mut();
+        let lighting = world
+            .query::<(Entity, &SettingButton)>()
+            .iter(world)
+            .find(|(_, button)| {
+                world.resource::<MenuSettings>().options[button.0].key == "TERRA_NEXT_LIGHTING"
+            })
+            .map(|(entity, _)| entity)
+            .unwrap();
+        *world.get_mut::<Interaction>(lighting).unwrap() = Interaction::Pressed;
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<MenuSettings>()
+                .get("TERRA_NEXT_LIGHTING")
+                .unwrap()
+                .value(),
+            "overcast"
+        );
         press::<PreviewToggle>(&mut app);
         assert!(!app.world().resource::<DepthCameraConfig>().preview);
         press::<PreviewToggle>(&mut app);

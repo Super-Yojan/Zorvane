@@ -231,6 +231,8 @@ pub fn online_clicks(
     mut menu: ResMut<OnlineMenu>,
     mut session: ResMut<SimSession>,
     bridge: Option<Res<Bridge>>,
+    match_settings: Option<Res<crate::settings::MenuSettings>>,
+    mut lighting: Option<ResMut<crate::mason_field::Lighting>>,
     buttons: Query<(&Interaction, &OnlineButton), Changed<Interaction>>,
 ) {
     let pressed: Vec<OnlineButton> = buttons
@@ -315,6 +317,14 @@ pub fn online_clicks(
                 menu.lobby = None;
                 menu.screen = Screen::Off;
                 menu.focus = None;
+                // The start menu's match choices (camera, lighting, ...) apply to a hosted room too.
+                if let Some(match_settings) = &match_settings {
+                    crate::menu::apply_match_settings(
+                        &mut commands,
+                        match_settings,
+                        lighting.as_deref_mut(),
+                    );
+                }
                 session.phase = Phase::Playing;
                 session.ui_epoch = session.ui_epoch.wrapping_add(1);
                 commands.insert_resource(RebuildWorld);

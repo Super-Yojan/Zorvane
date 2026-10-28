@@ -9,6 +9,7 @@ with the seat secret, drops commands for rovers that are not yours, and only
 pulls the state you can see across the network.
 
     python3 tools/zorvane_player.py --host tcp/192.168.1.20:7447 --name ana --team red
+    python3 tools/zorvane_player.py --host tcp/192.168.1.20:7447 watch
     python3 tools/zorvane_player.py --host tcp/192.168.1.20:7447 status
     python3 tools/zorvane_player.py --host tcp/192.168.1.20:7447 control start --host-key KEY
 
@@ -170,10 +171,12 @@ def read_match_state(session, prefix, timeout=3.0):
 
 
 class Relay:
-    """Bridges this machine's local endpoint to the host for one seat."""
+    """Bridges this machine's local endpoint to the host for one seat, or for a
+    spectator (`watch`) who takes no seat and sends no commands."""
 
     def __init__(self, args, remote, local):
         self.args, self.remote, self.local = args, remote, local
+        self.watching = args.command == "watch"
         self.prefix = args.prefix  # the host's rovers
         self.local_prefix = args.local_prefix  # what local clients use
         self.seat = None
@@ -236,7 +239,9 @@ class Relay:
             visible = rover in self.view
         payload = sample.payload.to_bytes()
         key = swap_prefix(key, self.local_prefix, self.prefix)
-        if mine:
+        if self.watching and kind not in FPV_COMMANDS:
+            self.warn_once(f"Dropped {key}: spectators watch and do not drive.")
+        elif mine:
             signer.put(self.remote, key, payload)
         elif kind in FPV_COMMANDS and visible:
             self.remote.put(key, payload)
@@ -257,7 +262,8 @@ class Relay:
         state = json.loads(payload)
         with self.lock:
             self.match_state = state
-            seated = any(seat["seat"] == self.seat for seat in state.get("seats", []))
+            seated = self.watching or any(
+                seat["seat"] == self.seat for seat in state.get("seats", []))
             self.missing = 0 if seated else self.missing + 1
 
     def kinds_in_view(self, rover):
@@ -280,7 +286,11 @@ class Relay:
 
     def run(self):
         prefix = self.prefix
-        self.join(parse_rovers(self.args.rovers))
+        if self.watching:
+            print(f"Watching as a spectator: every rover's state, no seat, no commands. "
+                  f"Clients (ARGOS) connect to {self.args.listen}.", flush=True)
+        else:
+            self.join(parse_rovers(self.args.rovers))
         subscribers = [
             self.local.declare_subscriber(f"{self.local_prefix}/**", self.from_local),
             self.remote.declare_subscriber(f"{prefix}/match/state", self.on_match_state),
@@ -292,7 +302,7 @@ class Relay:
         try:
             while True:
                 now = time.monotonic()
-                if now - last_heartbeat >= 2.0:
+                if not self.watching and now - last_heartbeat >= 2.0:
                     last_heartbeat = now
                     self.signer.put(self.remote, f"{prefix}/match/heartbeat", b"{}")
                 if self.missing >= 3:
@@ -316,7 +326,8 @@ class Relay:
             pass
         finally:
             try:
-                self.signer.put(self.remote, f"{prefix}/match/leave", b"{}")
+                if self.signer:
+                    self.signer.put(self.remote, f"{prefix}/match/leave", b"{}")
             except Exception:  # noqa: BLE001 - best effort on the way out
                 pass
             for subscriber in subscribers + [s for subs in self.view_subs.values() for s in subs]:
@@ -382,6 +393,14 @@ def main():
         target.add_argument("--frames", choices=["own", "see", "none"], default="own",
                             help="Camera frames for: own rovers, every rover in view, or none")
         target.add_argument("--report", type=float, default=10.0, help="Status line period, s")
+    watch = sub.add_parser("watch", help="Spectate: relay every rover's state, take no seat")
+    watch.add_argument("--listen", default="tcp/127.0.0.1:7447",
+                       help="Local endpoint for ARGOS")
+    watch.add_argument("--frames", choices=["see", "none"], default="none",
+                       help="Camera frames for every rover, or none")
+    watch.add_argument("--report", type=float, default=10.0, help="Status line period, s")
+    watch.set_defaults(see="all", team=None, rovers=None, name="spectator", kind="spectator",
+                       code=None)
     sub.add_parser("status", help="Print the match state and the round trip to the host")
     sub.add_parser("rooms", help="List the open rooms on the lobby server")
     control = sub.add_parser("control", help="Host: start, pause, resume, reset or kick")

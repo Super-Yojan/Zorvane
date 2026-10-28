@@ -48,7 +48,16 @@ The intro cutscene plays first: a camera tour of the field with captions and a
 voice-over of the rules. Enter skips it. `TERRA_ZENOH=0` leaves the primary rover
 on the keyboard: W and S drive forward and back, A and D turn, Space stops. With
 Zenoh on, a remote client drives rover 0 with `teleop`. Zenoh keys stay
-`terra/rover/<id>/…`:
+`terra/rover/<id>/…`.
+
+The camera is yours, not a rover's. V switches between following a rover and a
+free camera; Tab or 0 to 7 picks the rover to follow, and O jumps to the field
+overview. In the free camera WASD or the arrows move, Q and E go down and up,
+Shift is faster, the wheel sets the speed and the right mouse button looks
+around; while following, the right button orbits and the wheel zooms. In the
+free camera WASD no longer drives rover 0. The hint in the lower left lists the
+keys; H hides it.
+
 
 ```sh
 cargo run -p zorvane
@@ -61,13 +70,18 @@ Headless smoke, no window, no cutscene and no Zenoh:
 TERRA_HEADLESS=1 TERRA_ZENOH=0 ZORVANE_SMOKE=1 cargo run -p zorvane
 ```
 
+The start menu offers each of these (and the network options in
+[MULTIPLAYER.md](MULTIPLAYER.md)) as a click-to-cycle option, so the variables
+are only needed for scripts. A variable sets the menu's starting value.
+
 | Variable | Effect |
 | --- | --- |
 | `ZORVANE_VEHICLE` | Rover body. Defaults to `crab-trap-bot`. |
 | `ZORVANE_CUTSCENE=0` | Skip the intro cutscene. `scripts/run-argos-local.sh` sets it. |
 | `TERRA_NEXT_LIGHTING` | `noon` (default), `overcast` or `evening`, for camera and detection data. |
 | `TERRA_NEXT_BALLS` | Extra balls scattered over the pitch, on top of the 198 in the boxes. |
-| `TERRA_NEXT_CAMERA=overview` | Spectator view over the west touchline instead of following rover 0. |
+| `TERRA_NEXT_CAMERA` | `follow` (default), `free`, `overview` (over the west touchline) or `spectator` (free, no keyboard driving). |
+| `ZORVANE_SPECTATOR=1` | Start in free camera mode and never drive a rover from the keyboard. |
 | `TERRA_NEXT_SEED` | Bucket layout seed (default 42). |
 
 CrabTrapBot has an open-front collision frame. A ball entering the low intake,

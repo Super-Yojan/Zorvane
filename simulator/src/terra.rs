@@ -363,10 +363,14 @@ pub(crate) fn reconcile_fleet(
 fn keyboard_command(
     keys: Res<ButtonInput<KeyCode>>,
     config: Res<DriveConfig>,
+    camera: Option<Res<crate::spectator::SpectatorCamera>>,
     mut rovers: Query<&mut DriveCommand, (With<Rover>, With<KeyboardControlled>)>,
 ) {
+    // The free camera and spectator mode use WASD; the rover then holds still.
+    let drives = camera.is_none_or(|camera| camera.keyboard_drives());
     let axis = |positive, negative| {
-        keys.pressed(positive) as i32 as f32 - keys.pressed(negative) as i32 as f32
+        (drives && keys.pressed(positive)) as i32 as f32
+            - (drives && keys.pressed(negative)) as i32 as f32
     };
     for mut command in &mut rovers {
         *command = if keys.pressed(KeyCode::Space) {
@@ -556,6 +560,31 @@ mod tests {
         let velocity = app.world().get::<LinearVelocity>(entity).unwrap().0;
         near(velocity.x, 0.0);
         near(velocity.y, -2.0);
+    }
+
+    #[test]
+    fn free_camera_keeps_wasd_off_the_rover() {
+        let mut app = App::new();
+        let mut camera = crate::spectator::SpectatorCamera::new(true, false);
+        camera.mode = crate::spectator::CameraMode::Free;
+        app.insert_resource(DriveConfig::default())
+            .insert_resource(camera)
+            .insert_resource(ButtonInput::<KeyCode>::default())
+            .add_systems(FixedUpdate, keyboard_command);
+        let entity = app
+            .world_mut()
+            .spawn((Rover, KeyboardControlled, DriveCommand::default()))
+            .id();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyW);
+        app.world_mut().run_schedule(FixedUpdate);
+        near(app.world().get::<DriveCommand>(entity).unwrap().linear, 0.0);
+        app.world_mut()
+            .resource_mut::<crate::spectator::SpectatorCamera>()
+            .mode = crate::spectator::CameraMode::Follow(0);
+        app.world_mut().run_schedule(FixedUpdate);
+        assert!(app.world().get::<DriveCommand>(entity).unwrap().linear > 0.0);
     }
 
     #[test]
