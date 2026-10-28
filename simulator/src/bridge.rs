@@ -691,6 +691,7 @@ fn publish_next_state(
         &RoverId,
         &crate::terra::RoverSlot,
         &crate::next_competition::RoverBallLoad,
+        Option<&crate::next_competition::AtHomeGoal>,
         Option<&crate::next_competition::DumpReady>,
     )>,
 ) {
@@ -700,9 +701,13 @@ fn publish_next_state(
     }
     *last = now;
     let mut outgoing = bridge.shared.outgoing.lock().unwrap();
-    for (id, slot, load, ready) in &rovers {
-        let status =
-            crate::next_competition::status_json(slot.0, *load, ready.is_some_and(|r| r.0));
+    for (id, slot, load, at_goal, ready) in &rovers {
+        let status = crate::next_competition::status_json(
+            slot.0,
+            *load,
+            at_goal.is_some_and(|at| at.0),
+            ready.is_some_and(|r| r.0),
+        );
         outgoing.states.insert(
             (id.0, "next/status".into()),
             serde_json::to_vec(&status).unwrap(),

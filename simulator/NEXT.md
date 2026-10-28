@@ -99,8 +99,11 @@ OPERATOR**, under the Red and Blue scores.
 1. Drive back to the goal you started on (even slots south, odd slots north).
    Within 1 m of the goal line, collected balls become *waiting*; the rover keeps
    driving.
-2. Click **LOAD 1 INTO DUMPER**, or the rover in the 3D view, to move one waiting
-   ball into the top dumper. It holds `DUMPER_CAPACITY` (2) balls, about 0.6 m up.
+2. While still at the goal, click **LOAD 1 INTO DUMPER**, or the rover in the 3D
+   view, to move one waiting ball into the top dumper. It holds
+   `DUMPER_CAPACITY` (2) balls, about 0.6 m up. LOAD only works at the home
+   goal; balls still waiting after a dump need another trip back, and the panel
+   says so.
 3. Drive into the opposing half and park against one of your alliance's
    ground-level buckets: Red dumps into orange, Blue into blue (rules 3.2b).
    **DUMP** appears once the outlet is over the bucket opening.
