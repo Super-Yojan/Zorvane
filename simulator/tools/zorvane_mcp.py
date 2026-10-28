@@ -74,9 +74,9 @@ Scoring loop:
    line). Collected balls become waiting. Nowhere else on the goal line counts.
 3. load_ball() moves one waiting ball into the dumper (it holds 2). It only
    works at your goal mouth, so load before you leave.
-4. approach_bucket() parks over a ground-level bucket of your colour;
-   get_match_state() then reports can_dump.
-5. dump(). A ball that lands in the bucket scores 1 point, or 2 if the bucket is
+4. approach_bucket() lines the outlet up over a ground-level bucket of your
+   colour with the rover's own bucket dock; get_match_state() then reports can_dump.
+5. dump() approves the dock's dump and the gate opens. A ball that lands in the bucket scores 1 point, or 2 if the bucket is
    within 30 m of the opponent's Base. Raised buckets (1 m stands) are out of
    reach. Go back to the goal mouth, load 2 more and dump again until waiting
    is 0.
@@ -582,12 +582,24 @@ def build_server(rover, telemetry, field_map=None):
                            "autonomy_reason": (telemetry.json("autonomy/status") or {}).get("reason"),
                            "pose": telemetry.json("pose")})
 
+    def dock_status():
+        return (telemetry.json("autonomy/status") or {}).get("dock") or {}
+
+    def wait_dock(phases, wait_s):
+        deadline = time.monotonic() + wait_s
+        status = dock_status()
+        while status.get("phase") not in phases and time.monotonic() < deadline:
+            time.sleep(0.1)
+            status = dock_status()
+        return status
+
     @server.tool()
     def approach_bucket(object_id: int, wait_s: float = 45.0) -> str:
-        """Park over one of your detected buckets so dump() works. Drives (L2) to a
-        point 1.5 m short of the bucket's dump pose, then creeps in at 0.1 m/s,
-        steering at the bucket, until can_dump is true. Stops short rather than
-        touch the bucket; if can_dump stays false, finish with small drive() steps."""
+        """Line up over one of your detected buckets so dump() works. Drives (L2) to a
+        point 1.5 m short of the bucket's dump pose, then starts the rover's bucket
+        dock: it steers on live detections at up to 0.1 m/s, stops with the dumper
+        outlet over the bucket and reports phase "aligned". It never touches the
+        bucket. A failed dock reports why (for example lost_fix); approach again."""
         target = next((o for o in telemetry.objects("bucket") if o["id"] == object_id), None)
         if target is None:
             return f"No confirmed bucket with id {object_id}. Call get_objects(kind='bucket')."
@@ -602,30 +614,20 @@ def build_server(rover, telemetry, field_map=None):
             if reply["outcome"] != "arrived":
                 return json.dumps({"result": "could not reach the standoff point", "go_to": reply})
         rover.select_level("teleop", DRIVE_LEVELS)
-
-        def can_dump():
-            return bool((telemetry.json("next/status") or {}).get("can_dump"))
-
-        deadline = time.monotonic() + 30.0
-        try:
-            while not can_dump() and time.monotonic() < deadline:
-                pose = telemetry.json("pose")
-                outlet = (pose["x"] + OUTLET_AHEAD_M * math.cos(pose["yaw"]),
-                          pose["y"] + OUTLET_AHEAD_M * math.sin(pose["yaw"]))
-                to_bucket = math.hypot(bx - pose["x"], by - pose["y"])
-                # Past the point where the outlet would be over the bucket centre.
-                if to_bucket < OUTLET_AHEAD_M - DUMP_TOLERANCE_M:
-                    break
-                error = wrap(math.atan2(by - pose["y"], bx - pose["x"]) - pose["yaw"])
-                speed = 0.1 if math.hypot(outlet[0] - bx, outlet[1] - by) < 0.6 else 0.25
-                rover.teleop(speed, max(-0.6, min(0.6, 1.5 * error)))
-                time.sleep(0.05)
-        finally:
-            rover.teleop(0.0, 0.0)
+        token = f"dock-{time.time_ns()}"
+        rover.put("dock", bound(telemetry.authority(),
+                                {"action": "start", "object_id": object_id, "token": token}))
+        deadline = time.monotonic() + 2.0
+        while dock_status().get("token") != token and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if dock_status().get("token") != token:
+            status = telemetry.authority()
+            return json.dumps({"result": "dock refused", "reason": status.get("request_reason")})
+        status = wait_dock(("aligned", "done", "failed", "cancelled"), max(1.0, min(wait_s, 60.0)))
         time.sleep(0.3)
-        return json.dumps({"result": "can_dump" if can_dump() else "close but not aligned",
-                           "bucket": {"x": bx, "y": by}, "pose": telemetry.json("pose"),
-                           "rover": telemetry.json("next/status")})
+        return json.dumps({"result": "can_dump" if (telemetry.json("next/status") or {}).get("can_dump")
+                           else status.get("phase", "dock_timeout"),
+                           "dock": status, "rover": telemetry.json("next/status")})
 
     @server.tool()
     def drive(linear: float, angular: float, seconds: float = 1.0) -> str:
@@ -687,12 +689,19 @@ def build_server(rover, telemetry, field_map=None):
 
     @server.tool()
     def dump() -> str:
-        """Dump the dumper into the bucket ahead. Only works when can_dump is true."""
+        """Dump the dumper into the bucket ahead. Only works when can_dump is true.
+        After approach_bucket() this approves the dock's dump, which opens the gate."""
         status = telemetry.json("next/status") or {}
         if not status.get("can_dump"):
             return "can_dump is false: use approach_bucket() or park with the outlet over your bucket first."
         before = telemetry.json("next/score")
-        rover.put("next/dump", {})
+        dock = dock_status()
+        if dock.get("phase") == "aligned":
+            rover.put("dock", bound(telemetry.authority(), {
+                "action": "dump", "dock_id": dock["dock_id"], "token": f"dump-{time.time_ns()}"}))
+            wait_dock(("done", "failed", "cancelled"), 5.0)
+        else:
+            rover.put("next/dump", {})
         time.sleep(2.0)
         return json.dumps({"score_before": before, "score_after": telemetry.json("next/score"),
                            "rover": telemetry.json("next/status")})
