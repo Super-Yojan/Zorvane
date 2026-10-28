@@ -29,12 +29,17 @@ impl SimSession {
     }
 
     /// Windowed runs start here. `TERRA_ROVER_COUNT` preselects the fleet size.
+    /// A relaunch from the menu (`ZORVANE_AUTOSTART=1`) skips straight to play.
     pub fn from_env_menu() -> Self {
         let count = std::env::var("TERRA_ROVER_COUNT")
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(1);
-        Self::at_menu(count)
+        let mut session = Self::at_menu(count);
+        if std::env::var(crate::settings::AUTOSTART).as_deref() == Ok("1") {
+            session.phase = Phase::Playing;
+        }
+        session
     }
 }
 

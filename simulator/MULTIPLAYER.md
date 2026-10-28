@@ -34,6 +34,11 @@ TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447 ZORVANE_MATCH=seated ZORVANE_JOIN_CODE=field
 TERRA_ROVER_COUNT=4 cargo run --release -p zorvane
 ```
 
+In a windowed host the start menu has the same choices: set **Who can connect**
+to *Other computers too*, **Multiplayer** to *Seated* and **Join code** to *New
+code* (the code is shown on the button), then press Start. Zorvane relaunches
+with those settings.
+
 Or headless, as a dedicated server: add `TERRA_HEADLESS=1`, or use
 [`docker/Dockerfile`](../docker/Dockerfile), which already listens on
 `0.0.0.0:7447`. Open TCP 7447 in the host's firewall.

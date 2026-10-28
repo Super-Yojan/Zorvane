@@ -8,8 +8,10 @@
 //! H hides the hint.
 //!
 //! The camera never drives a rover. In free flight the keyboard leaves rover 0
-//! alone, and `ZORVANE_SPECTATOR=1` starts in free flight with keyboard driving
-//! off, for watching while agents or remote players drive.
+//! alone. `TERRA_NEXT_CAMERA` (or the start menu's Camera choice) picks the start:
+//! `follow` (default), `free`, `overview`, or `spectator`, which is free flight
+//! with keyboard driving off for watching agents or remote players drive.
+//! `ZORVANE_SPECTATOR=1` is the same as `spectator`.
 use crate::{
     terra::{Rover, RoverSlot},
     world::{OVERVIEW_EYE, WorldCamera, WorldConfig},
@@ -25,7 +27,7 @@ impl Plugin for SpectatorPlugin {
             .world()
             .get_resource::<WorldConfig>()
             .is_none_or(|config| config.follow_rover);
-        app.insert_resource(SpectatorCamera::new(follow, spectator_env()))
+        app.insert_resource(SpectatorCamera::from_setting(&camera_setting(follow)))
             .add_systems(
                 PostUpdate,
                 (switch_mode, place_camera)
@@ -36,11 +38,20 @@ impl Plugin for SpectatorPlugin {
     }
 }
 
-fn spectator_env() -> bool {
-    matches!(
+/// The camera choice: menu or `TERRA_NEXT_CAMERA`, with `ZORVANE_SPECTATOR=1`
+/// as `spectator`. A world config that does not follow starts at the overview.
+pub fn camera_setting(follow: bool) -> String {
+    if matches!(
         std::env::var("ZORVANE_SPECTATOR").as_deref(),
         Ok("1") | Ok("true")
-    )
+    ) {
+        return "spectator".into();
+    }
+    match crate::settings::env("TERRA_NEXT_CAMERA") {
+        Some(value) if !value.trim().is_empty() => value.trim().to_owned(),
+        _ if !follow => "overview".into(),
+        _ => "follow".into(),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -67,6 +78,8 @@ pub struct SpectatorCamera {
     /// The keyboard never drives a rover (`ZORVANE_SPECTATOR=1`).
     pub spectator_only: bool,
     pub show_hint: bool,
+    /// Jump to the field overview once the world camera exists.
+    jump_to_overview: bool,
     yaw: f32,
     pitch: f32,
     /// Follow camera's turn about the rover, radians, and distance scale.
@@ -86,12 +99,21 @@ impl SpectatorCamera {
             speed: 8.0,
             spectator_only,
             show_hint: true,
+            jump_to_overview: false,
             yaw: 0.0,
             pitch: 0.0,
             orbit: 0.0,
             zoom: 1.0,
             last_followed: 0,
         }
+    }
+
+    /// `follow`, `free`, `overview` or `spectator`; anything else follows.
+    pub fn from_setting(value: &str) -> Self {
+        let follow = !matches!(value, "free" | "overview" | "spectator");
+        let mut state = Self::new(follow, value == "spectator");
+        state.jump_to_overview = value == "overview";
+        state
     }
 
     /// Whether WASD may drive the keyboard rover.
@@ -142,7 +164,7 @@ fn switch_mode(
     if keys.just_pressed(KeyCode::KeyH) {
         state.show_hint = !state.show_hint;
     }
-    if keys.just_pressed(KeyCode::KeyO) {
+    if std::mem::take(&mut state.jump_to_overview) || keys.just_pressed(KeyCode::KeyO) {
         *camera = Transform::from_translation(OVERVIEW_EYE).looking_at(Vec3::ZERO, Vec3::Y);
         state.fly_from(&camera);
         return;
@@ -303,14 +325,14 @@ fn hint_text(state: &SpectatorCamera, keyboard_rover: bool) -> String {
     match state.mode {
         CameraMode::Follow(slot) => format!(
             "Camera: following rover {}  ({drive})\n\
-             V free camera · Tab next rover · 0-7 pick rover · O overview\n\
-             Right-drag orbit · wheel zoom · H hide",
+             V free camera | Tab next rover | 0-7 pick rover | O overview\n\
+             Right-drag orbit | wheel zoom | H hide",
             slot
         ),
         CameraMode::Free => format!(
             "Camera: free, {:.0} m/s  ({drive})\n\
-             WASD move · Q/E down/up · Shift fast · right-drag look · wheel speed\n\
-             V follow · Tab/0-7 follow a rover · O overview · H hide",
+             WASD move | Q/E down/up | Shift fast | right-drag look | wheel speed\n\
+             V follow | Tab/0-7 follow a rover | O overview | H hide",
             state.speed
         ),
     }

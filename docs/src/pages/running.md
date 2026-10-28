@@ -48,7 +48,9 @@ With Zenoh on, your dashboard drives. **LOAD 1 INTO DUMPER** and **DUMP** in the
 
 ## Settings
 
-Set these in the environment before you start `zorvane`.
+The start menu offers these as options: click an option to cycle it. **Match** options (camera, lighting, extra balls, bucket layout, cutscene) apply when you press Start, and again on Restart from the pause menu. **Simulator and network** options (rover, motor control, dashboard link, who can connect, multiplayer, join code, seat timeout, FPV, detector) are read once at launch, so changing one makes Start relaunch Zorvane with the new values.
+
+You can also set them in the environment before you start `zorvane`; the menu then starts from those values. Router addresses, passwords and the host key stay environment only.
 
 | Variable | Effect |
 | --- | --- |
@@ -61,7 +63,7 @@ Set these in the environment before you start `zorvane`.
 | `TERRA_NEXT_LIGHTING` | `noon` (default), `overcast` or `evening` |
 | `TERRA_NEXT_BALLS` | Extra balls scattered over the pitch |
 | `TERRA_NEXT_SEED` | Bucket layout seed, default 42 |
-| `TERRA_NEXT_CAMERA=overview` | Start over the whole field, in free camera mode, instead of following rover 0 |
+| `TERRA_NEXT_CAMERA` | `follow` (default), `free`, `overview` or `spectator` (free camera, keyboard never drives) |
 | `ZORVANE_SPECTATOR=1` | Start in free camera mode with keyboard driving off, for watching agents or remote players |
 | `ZORVANE_FPV=0` | Turn FPV video off |
 | `ZORVANE_OBJECTS=0` | Turn off bucket and ball detection (one shared YOLO model for all rovers) |

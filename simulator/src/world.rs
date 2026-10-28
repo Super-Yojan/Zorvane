@@ -74,11 +74,14 @@ impl Default for WorldConfig {
 }
 
 impl WorldConfig {
-    /// `TERRA_NEXT_CAMERA=overview` starts over the whole field, in free camera mode.
+    /// `TERRA_NEXT_CAMERA=overview|free|spectator` starts in free camera mode;
+    /// see `spectator`.
     pub fn from_env() -> Self {
         let mut config = Self::default();
-        if std::env::var("TERRA_NEXT_CAMERA").as_deref() == Ok("overview") {
-            config.camera_offset = OVERVIEW_EYE;
+        if matches!(
+            std::env::var("TERRA_NEXT_CAMERA").as_deref(),
+            Ok("overview") | Ok("free") | Ok("spectator")
+        ) {
             config.follow_rover = false;
         }
         config
