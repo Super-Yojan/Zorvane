@@ -150,6 +150,9 @@ def main():
             key = f"{args.prefix}/{args.rover}/teleop"
             status, subscriber = follow_authority(session, args)
             select_level(session, args, status, "teleop", ("assisted_teleop",))
+            # The rover drops teleop whose sequence is not above the last one for
+            # this operator id, so every run needs its own id.
+            operator = f"zenoh-client-{time.time_ns():x}"
             sequence = 0
 
             def teleop(linear, angular):
@@ -157,7 +160,7 @@ def main():
                 sequence += 1
                 session.put(key, json.dumps(bound(status, {
                     "linear": linear, "angular": angular,
-                    "operator_session_id": "zenoh-client", "sequence": sequence,
+                    "operator_session_id": operator, "sequence": sequence,
                 })))
 
             deadline = time.monotonic() + args.seconds

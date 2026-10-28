@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["simulator", "crates/zorvane-vehicle"]
+members = ["simulator", "crates/zorvane-vehicle", "crates/zorvane-lobby"]
 
 [workspace.package]
 version = "0.1.0"

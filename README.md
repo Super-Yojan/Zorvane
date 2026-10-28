@@ -65,6 +65,10 @@ cargo run --locked -p zorvane
 
 ## Multiplayer
 
+**Play online** in the start menu signs in to a lobby server (the ARGOS GCP
+router by default), lists rooms, and lets you create one or join one with its
+room password. Only the `zorvane` server account and a room password are needed.
+
 Players on other computers join one host's match, as people with ARGOS or
 teleop, or as AI agents through the MCP server. The host runs with
 `TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447 ZORVANE_MATCH=seated`; each player runs

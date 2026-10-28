@@ -38,6 +38,15 @@ class PlayerTests(unittest.TestCase):
         self.assertEqual(player.split_key("terra/rover", "terra/rover/match/state"), (None, "match/state"))
         self.assertEqual(player.split_key("terra/rover", "other/0/pose"), (None, None))
 
+    def test_room_prefix_and_swap(self):
+        self.assertEqual(player.room_prefix(" k7qxm "), "zorvane/room/K7QXM/rover")
+        room = player.room_prefix("K7QXM")
+        self.assertEqual(player.swap_prefix("terra/rover/1/teleop", "terra/rover", room),
+                         "zorvane/room/K7QXM/rover/1/teleop")
+        self.assertEqual(player.swap_prefix(f"{room}/match/state", room, "terra/rover"),
+                         "terra/rover/match/state")
+        self.assertEqual(player.swap_prefix("terra/rovers/1", "terra/rover", room), "terra/rovers/1")
+
     def test_parse_rovers(self):
         self.assertEqual(player.parse_rovers("2"), 2)
         self.assertEqual(player.parse_rovers("all"), "all")

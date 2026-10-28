@@ -1,0 +1,11 @@
+[package]
+name = "zorvane-lobby"
+version.workspace = true
+edition.workspace = true
+description = "Zorvane lobby server: a Zenoh router where hosts open rooms and players find them"
+publish = false
+
+[dependencies]
+# Same Zenoh as the simulator, so hosts, players and the lobby speak one protocol.
+zenoh = { version = "1.10.1", default-features = false, features = ["auth_usrpwd", "transport_tcp", "transport_tls"] }
+serde_json = "1.0.151"

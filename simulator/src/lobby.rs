@@ -150,6 +150,39 @@ pub struct Lobby {
     next_seat: u64,
     running_since: Option<Instant>,
     elapsed_before: Duration,
+    /// The seat of whoever plays at the host machine. Its unsigned commands
+    /// from the local listener count as that seat's, and it never times out.
+    local_seat: Option<String>,
+    /// Settings from before `host_room`, restored by `close_room`.
+    before_room: Option<LobbyConfig>,
+}
+
+/// An online room this simulator hosts on a lobby server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomMeta {
+    pub code: String,
+    pub name: String,
+    pub host: String,
+    pub password: bool,
+}
+
+/// Lobby key space. Rooms answer `zorvane/rooms/<code>`; a room's rovers live
+/// under `zorvane/room/<code>/rover` instead of `terra/rover`.
+pub const ROOMS: &str = "zorvane/rooms";
+
+pub fn room_prefix(code: &str) -> String {
+    format!("zorvane/room/{code}/rover")
+}
+
+/// Five letters and digits without look-alikes, for reading out loud.
+pub fn room_code() -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+    let mut bytes = [0u8; 5];
+    getrandom::fill(&mut bytes).expect("operating system random source");
+    bytes
+        .iter()
+        .map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char)
+        .collect()
 }
 
 impl Default for Lobby {
@@ -182,7 +215,61 @@ impl Lobby {
             next_seat: 1,
             running_since: (phase == Phase::Running).then(Instant::now),
             elapsed_before: Duration::ZERO,
+            local_seat: None,
+            before_room: None,
         }
+    }
+
+    /// Switches to seated play for an online room: no seats, back in the lobby.
+    pub fn host_room(&mut self, password: Option<String>) {
+        let before = self
+            .before_room
+            .take()
+            .unwrap_or_else(|| self.config.clone());
+        let config = LobbyConfig {
+            mode: Mode::Seated,
+            join_code: password,
+            ..before.clone()
+        };
+        *self = Self {
+            before_room: Some(before),
+            ..Self::new(config)
+        };
+    }
+
+    /// Ends hosting and returns to the settings from before the room.
+    pub fn close_room(&mut self) {
+        if let Some(before) = self.before_room.take() {
+            *self = Self::new(before);
+        }
+    }
+
+    pub fn seat_count(&self) -> usize {
+        self.seats.len()
+    }
+
+    pub fn local_seat(&self) -> Option<&str> {
+        self.local_seat.as_deref()
+    }
+
+    /// Seats the player at the host machine on every free rover of `team`.
+    pub fn seat_local(
+        &mut self,
+        name: &str,
+        team: Team,
+        fleet: &[(u64, Team)],
+        now: Instant,
+    ) -> Result<String, String> {
+        let request = serde_json::json!({
+            "name": name,
+            "team": team,
+            "rovers": "all",
+            "code": self.config.join_code,
+        });
+        let reply = self.join(&serde_json::to_vec(&request).unwrap(), fleet, now)?;
+        let seat = reply["seat"].as_str().unwrap_or_default().to_owned();
+        self.local_seat = Some(seat.clone());
+        Ok(seat)
     }
 
     pub fn owner(&self, rover: u64) -> Option<&str> {
@@ -382,6 +469,9 @@ impl Lobby {
 
     /// Frees a seat. Returns its rovers.
     pub fn leave(&mut self, seat: &str) -> Vec<u64> {
+        if self.local_seat.as_deref() == Some(seat) {
+            self.local_seat = None;
+        }
         self.seats
             .remove(seat)
             .map(|seat| seat.rovers)
@@ -394,7 +484,10 @@ impl Lobby {
         let stale: Vec<String> = self
             .seats
             .iter()
-            .filter(|(_, seat)| now.saturating_duration_since(seat.last_seen) > timeout)
+            .filter(|(id, seat)| {
+                Some(id.as_str()) != self.local_seat.as_deref()
+                    && now.saturating_duration_since(seat.last_seen) > timeout
+            })
             .map(|(id, _)| id.clone())
             .collect();
         stale.iter().flat_map(|seat| self.leave(seat)).collect()
@@ -431,6 +524,7 @@ impl Lobby {
                 }
             }
             MatchAction::Kick => {
+                self.local_seat = None;
                 return std::mem::take(&mut self.seats)
                     .into_values()
                     .flat_map(|seat| seat.rovers)
@@ -443,6 +537,42 @@ impl Lobby {
 
     pub fn elapsed(&self, now: Instant) -> Duration {
         self.elapsed_before + self.running_since.map_or(Duration::ZERO, |t| now - t)
+    }
+
+    /// The answer to `zorvane/rooms/<code>`: what a player sees in the room list.
+    pub fn room_info(
+        &self,
+        room: &RoomMeta,
+        fleet: &[(u64, Team)],
+        now: Instant,
+    ) -> serde_json::Value {
+        let free = |team: Team| {
+            fleet
+                .iter()
+                .filter(|(id, t)| *t == team && self.owner(*id).is_none())
+                .count()
+        };
+        let seats: Vec<_> = self
+            .seats
+            .values()
+            .map(
+                |seat| serde_json::json!({"name": seat.name, "kind": seat.kind, "team": seat.team}),
+            )
+            .collect();
+        serde_json::json!({
+            "schema_version": 1,
+            "code": room.code,
+            "name": room.name,
+            "host": room.host,
+            "prefix": room_prefix(&room.code),
+            "password": room.password,
+            "phase": self.phase,
+            "elapsed": self.elapsed(now).as_secs_f64(),
+            "rovers": fleet.len(),
+            "free": {"red": free(Team::Red), "blue": free(Team::Blue)},
+            "seats": seats,
+            "version": env!("CARGO_PKG_VERSION"),
+        })
     }
 
     /// `<prefix>/match/state`. Never carries secrets.
@@ -478,15 +608,21 @@ impl Lobby {
     }
 }
 
-fn mac_for(secret: &str, seat: &str, seq: u64, key: &str, payload: &[u8]) -> Hmac<Sha256> {
+pub(crate) fn mac_for(
+    secret: &str,
+    seat: &str,
+    seq: u64,
+    key: &str,
+    payload: &[u8],
+) -> Hmac<Sha256> {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC takes any key");
     mac.update(format!("{seat}\n{seq}\n{key}\n").as_bytes());
     mac.update(payload);
     mac
 }
 
-/// The attachment a client sends. Used by tests; clients do the same in Python.
-#[cfg(test)]
+/// The attachment a client sends. The in-app relay and the tests use it;
+/// `tools/zorvane_player.py` does the same in Python.
 pub fn sign(secret: &str, seat: &str, seq: u64, key: &str, payload: &[u8]) -> Vec<u8> {
     let mac = mac_for(secret, seat, seq, key, payload)
         .finalize()
@@ -533,6 +669,95 @@ mod tests {
             (2, Team::Red),
             (3, Team::Blue),
         ]
+    }
+
+    fn room() -> RoomMeta {
+        RoomMeta {
+            code: "TEST1".into(),
+            name: "Test room".into(),
+            host: "ana".into(),
+            password: true,
+        }
+    }
+
+    #[test]
+    fn room_codes_avoid_look_alike_characters() {
+        for _ in 0..50 {
+            let code = room_code();
+            assert_eq!(code.len(), 5);
+            assert!(!code.contains(['0', 'O', '1', 'I', 'L']));
+        }
+    }
+
+    #[test]
+    fn hosting_a_room_needs_the_room_password_and_closing_restores_settings() {
+        let mut lobby = Lobby::new(LobbyConfig::default());
+        let host_key = lobby.config.host_key.clone();
+        lobby.host_room(Some("secret".into()));
+        assert_eq!(lobby.config.mode, Mode::Seated);
+        assert_eq!(lobby.config.host_key, host_key);
+        let wrong = join(
+            &mut lobby,
+            serde_json::json!({"name": "bo", "team": "blue", "code": "nope"}),
+        );
+        assert!(wrong.is_err());
+        assert!(
+            join(
+                &mut lobby,
+                serde_json::json!({"name": "bo", "team": "blue", "code": "secret"})
+            )
+            .is_ok()
+        );
+        assert_eq!(lobby.seat_count(), 1);
+
+        lobby.close_room();
+        assert_eq!(lobby.config.mode, Mode::Open);
+        assert_eq!(lobby.config.join_code, None);
+        assert_eq!(lobby.seat_count(), 0);
+    }
+
+    #[test]
+    fn local_seat_drives_its_team_and_never_times_out() {
+        let mut lobby = seated();
+        let start = Instant::now();
+        let seat = lobby.seat_local("ana", Team::Red, &fleet(), start).unwrap();
+        assert_eq!(lobby.local_seat(), Some(seat.as_str()));
+        assert_eq!(lobby.owner(0), Some(seat.as_str()));
+        assert_eq!(lobby.owner(2), Some(seat.as_str()));
+        assert_eq!(lobby.owner(1), None);
+
+        join(
+            &mut lobby,
+            serde_json::json!({"name": "bo", "team": "blue", "code": "field3"}),
+        )
+        .unwrap();
+        lobby.expire(start + Duration::from_secs(60));
+        assert_eq!(lobby.seat_count(), 1);
+        assert_eq!(lobby.local_seat(), Some(seat.as_str()));
+
+        lobby.leave(&seat);
+        assert_eq!(lobby.local_seat(), None);
+    }
+
+    #[test]
+    fn room_info_lists_free_rovers_and_no_secrets() {
+        let mut lobby = seated();
+        let now = Instant::now();
+        join(
+            &mut lobby,
+            serde_json::json!({"name": "bo", "team": "blue", "code": "field3"}),
+        )
+        .unwrap();
+        let info = lobby.room_info(&room(), &fleet(), now);
+        assert_eq!(info["code"], "TEST1");
+        assert_eq!(info["prefix"], "zorvane/room/TEST1/rover");
+        assert_eq!(info["password"], true);
+        assert_eq!(info["free"]["red"], 2);
+        assert_eq!(info["free"]["blue"], 1);
+        assert_eq!(info["seats"][0]["name"], "bo");
+        let text = info.to_string();
+        assert!(!text.contains("field3"));
+        assert!(!text.contains("host-key-123"));
     }
 
     fn join(lobby: &mut Lobby, body: serde_json::Value) -> Result<serde_json::Value, String> {

@@ -7,9 +7,20 @@ pub struct MenuPlugin;
 
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
+        crate::online_menu::install(app);
         app.add_systems(Startup, spawn_ui_camera).add_systems(
             Update,
-            (toggle_pause, sync_clock, clicks, rebuild_ui, sync_ui_camera).chain(),
+            (
+                toggle_pause,
+                sync_clock,
+                clicks,
+                crate::online_menu::type_text,
+                crate::online_menu::online_clicks,
+                crate::online_menu::poll_online,
+                rebuild_ui,
+                sync_ui_camera,
+            )
+                .chain(),
         );
     }
 }
@@ -27,7 +38,7 @@ struct RestartButton;
 #[derive(Component)]
 struct PauseButton;
 #[derive(Component)]
-struct RoverStep(i32);
+pub(crate) struct RoverStep(pub i32);
 #[derive(Component)]
 struct PreviewToggle;
 
@@ -52,9 +63,9 @@ fn toggle_pause(keys: Res<ButtonInput<KeyCode>>, mut session: ResMut<SimSession>
     session.phase = match session.phase {
         Phase::Playing => Phase::Paused,
         Phase::Paused => Phase::Playing,
-        Phase::Menu => Phase::Menu,
+        other => other,
     };
-    if session.phase != Phase::Menu {
+    if matches!(session.phase, Phase::Playing | Phase::Paused) {
         session.ui_epoch = session.ui_epoch.wrapping_add(1);
     }
 }
@@ -122,29 +133,82 @@ fn clicks(
 fn rebuild_ui(
     mut commands: Commands,
     session: Res<SimSession>,
+    online: Res<crate::online_menu::OnlineMenu>,
+    bridge: Option<Res<crate::bridge::Bridge>>,
     depth: Option<Res<crate::depth_camera::DepthCameraConfig>>,
     roots: Query<Entity, With<MenuRoot>>,
-    mut built: Local<u32>,
+    mut built: Local<(u32, u32)>,
 ) {
-    if *built == session.ui_epoch && !roots.is_empty() {
+    let epoch = (session.ui_epoch, online.epoch);
+    if *built == epoch && !roots.is_empty() {
         return;
     }
-    *built = session.ui_epoch;
+    *built = epoch;
     for entity in &roots {
         commands.entity(entity).despawn();
     }
     let preview_on = depth.is_none_or(|depth| depth.preview);
+    let hosting = online.hosting.is_some();
     match session.phase {
-        Phase::Playing => spawn_pause_chip(&mut commands),
-        Phase::Menu => spawn_panel(&mut commands, &session, false, preview_on),
-        Phase::Paused => spawn_panel(&mut commands, &session, true, preview_on),
+        Phase::Playing => {
+            spawn_pause_chip(&mut commands);
+            crate::online_menu::spawn_room_chip(
+                &mut commands,
+                MenuRoot,
+                &online,
+                bridge.as_deref(),
+            );
+        }
+        Phase::Menu if online.screen != crate::online_menu::Screen::Off => {
+            spawn_card(&mut commands, |panel| {
+                crate::online_menu::spawn_screen(panel, &online, session.rover_count)
+            });
+        }
+        Phase::Menu => spawn_panel(&mut commands, &session, false, preview_on, hosting),
+        Phase::Paused => spawn_panel(&mut commands, &session, true, preview_on, hosting),
+        Phase::Online => {
+            spawn_card(&mut commands, |panel| {
+                crate::online_menu::spawn_joined(panel, &online)
+            });
+        }
     }
+}
+
+/// A centred card on the menu background, like the start panel.
+fn spawn_card(commands: &mut Commands, build: impl FnOnce(&mut ChildSpawnerCommands)) {
+    commands
+        .spawn((
+            MenuRoot,
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+        ))
+        .with_children(|parent| {
+            parent
+                .spawn((
+                    Node {
+                        width: Val::Px(520.0),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Stretch,
+                        padding: UiRect::all(Val::Px(24.0)),
+                        row_gap: Val::Px(8.0),
+                        border_radius: BorderRadius::all(Val::Px(12.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.16, 0.18, 0.20)),
+                ))
+                .with_children(build);
+        });
 }
 
 fn sync_ui_camera(session: Res<SimSession>, mut cameras: Query<&mut Camera, With<UiCamera>>) {
     // The world camera is spawned with a deferred command, so it can be missing
     // for the frame that leaves the menu. Stop clearing as soon as we play.
-    let show_world = session.phase != Phase::Menu;
+    let show_world = matches!(session.phase, Phase::Playing | Phase::Paused);
     for mut camera in &mut cameras {
         camera.clear_color = if show_world {
             ClearColorConfig::None
@@ -170,7 +234,13 @@ fn spawn_pause_chip(commands: &mut Commands) {
         });
 }
 
-fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool, preview_on: bool) {
+fn spawn_panel(
+    commands: &mut Commands,
+    session: &SimSession,
+    paused: bool,
+    preview_on: bool,
+    hosting: bool,
+) {
     commands
         .spawn((
             MenuRoot,
@@ -218,7 +288,7 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool, prev
                             ..default()
                         })
                         .with_children(|row| {
-                            button(row, "−", RoverStep(-1), false);
+                            button(row, "-", RoverStep(-1), false);
                             label(row, &format!("{}", session.rover_count), 22.0, Color::WHITE);
                             button(row, "+", RoverStep(1), false);
                         });
@@ -237,15 +307,29 @@ fn spawn_panel(commands: &mut Commands, session: &SimSession, paused: bool, prev
                             .with_children(|row| {
                                 button(row, "Resume", ResumeButton, true);
                                 button(row, "Restart", RestartButton, false);
+                                if hosting {
+                                    button(
+                                        row,
+                                        "Close room",
+                                        crate::online_menu::OnlineButton::CloseRoom,
+                                        false,
+                                    );
+                                }
                             });
                     } else {
                         button(panel, "Start", StartButton, true);
+                        button(
+                            panel,
+                            "Play online",
+                            crate::online_menu::OnlineButton::Open,
+                            false,
+                        );
                     }
                 });
         });
 }
 
-fn label(parent: &mut ChildSpawnerCommands, text: &str, size: f32, color: Color) {
+pub(crate) fn label(parent: &mut ChildSpawnerCommands, text: &str, size: f32, color: Color) {
     parent.spawn((
         Text::new(text),
         TextFont {
@@ -256,7 +340,12 @@ fn label(parent: &mut ChildSpawnerCommands, text: &str, size: f32, color: Color)
     ));
 }
 
-fn button<T: Component>(parent: &mut ChildSpawnerCommands, text: &str, marker: T, selected: bool) {
+pub(crate) fn button<T: Component>(
+    parent: &mut ChildSpawnerCommands,
+    text: &str,
+    marker: T,
+    selected: bool,
+) {
     let color = if selected {
         Color::srgb(0.12, 0.45, 0.40)
     } else {

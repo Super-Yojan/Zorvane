@@ -11,6 +11,8 @@ mod object_detection;
 mod observability;
 mod observation_capture;
 mod occupancy_map;
+mod online;
+mod online_menu;
 mod physics;
 mod rgb_camera;
 mod robotics_pose;
@@ -118,6 +120,7 @@ fn main() {
             },
         ));
     install_fpv(&mut app);
+    online_menu::install_headless_join(&mut app);
     if session::interactive_menu() {
         app.add_plugins(menu::MenuPlugin);
     }
@@ -137,7 +140,10 @@ fn install_fpv(app: &mut App) {
     let (endpoint, credentials) = if !config.listen.is_empty() {
         (config.listen.replace("0.0.0.0", "127.0.0.1"), None)
     } else if let Some(remote) = config.connect.first() {
-        (remote.clone(), config.user.clone().zip(config.password.clone()))
+        (
+            remote.clone(),
+            config.user.clone().zip(config.password.clone()),
+        )
     } else {
         return;
     };

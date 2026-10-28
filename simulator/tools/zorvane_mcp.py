@@ -339,6 +339,9 @@ class Rover:
     def __init__(self, session, telemetry):
         self.session, self.telemetry = session, telemetry
         self.sequence = 0
+        # Teleop sequences only count up per operator id; a restarted server
+        # starts again at 1, so it needs a new id.
+        self.operator = f"zorvane-mcp-{time.time_ns():x}"
 
     def key(self, suffix):
         return f"{self.telemetry.prefix}/{self.telemetry.rover}/{suffix}"
@@ -376,7 +379,7 @@ class Rover:
         self.sequence += 1
         self.put("teleop", bound(self.telemetry.authority(), {
             "linear": linear, "angular": angular,
-            "operator_session_id": "zorvane-mcp", "sequence": self.sequence,
+            "operator_session_id": self.operator, "sequence": self.sequence,
         }))
 
     def burst(self, linear, angular, seconds, until=None):
