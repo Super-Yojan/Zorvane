@@ -23,7 +23,26 @@ The first window is the start menu. Choose how many rovers, then press **Start**
 | Esc | Pause menu: Resume, Restart |
 | Space | Stop every rover |
 | Enter | Skip the cutscene |
-| W A S D | Drive rover 0, only with Zenoh off (`TERRA_ZENOH=0`) |
+| W A S D | Drive rover 0, only with Zenoh off (`TERRA_ZENOH=0`) and while the camera follows a rover |
+
+### Camera
+
+You can watch from anywhere, for example while AI agents drive. The camera never drives a rover.
+
+| Key | Action |
+| --- | --- |
+| V | Switch between following a rover and the free camera |
+| Tab | Follow the next rover |
+| 0 to 7 | Follow that rover |
+| O | Jump to the overview of the whole field (free camera) |
+| W A S D, arrows | Free camera: move |
+| Q / E | Free camera: down / up |
+| Shift | Free camera: four times faster |
+| Right mouse drag | Free camera: look around. Following: orbit the rover |
+| Mouse wheel | Free camera: speed. Following: zoom |
+| H | Hide the camera hint in the lower left |
+
+The free camera still moves while the match is paused.
 
 With Zenoh on, your dashboard drives. **LOAD 1 INTO DUMPER** and **DUMP** in the upper-right panel do the same thing as the `next/load` and `next/dump` topics.
 
@@ -42,7 +61,8 @@ Set these in the environment before you start `zorvane`.
 | `TERRA_NEXT_LIGHTING` | `noon` (default), `overcast` or `evening` |
 | `TERRA_NEXT_BALLS` | Extra balls scattered over the pitch |
 | `TERRA_NEXT_SEED` | Bucket layout seed, default 42 |
-| `TERRA_NEXT_CAMERA=overview` | Watch the whole field instead of following rover 0 |
+| `TERRA_NEXT_CAMERA=overview` | Start over the whole field, in free camera mode, instead of following rover 0 |
+| `ZORVANE_SPECTATOR=1` | Start in free camera mode with keyboard driving off, for watching agents or remote players |
 | `ZORVANE_FPV=0` | Turn FPV video off |
 | `ZORVANE_OBJECTS=0` | Turn off bucket and ball detection (one shared YOLO model for all rovers) |
 | `TERRA_HEADLESS=1` | No window |

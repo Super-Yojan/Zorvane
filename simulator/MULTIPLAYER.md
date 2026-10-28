@@ -90,6 +90,21 @@ local endpoint, `tcp/127.0.0.1:7447`, which is every tool's default:
 | `--frames own\|see\|none` | Camera frames for own rovers, every rover in view, or none. Default `own`. |
 | `--user`, `--password`, `--tls-ca` | For a hosted Zenoh router (below). |
 
+## Spectators
+
+People who only watch need no seat. On the host's own screen, start Zorvane
+with `ZORVANE_SPECTATOR=1` (or press V) for a free camera that never drives;
+see the camera keys in [NEXT.md](NEXT.md). From another computer, run the relay
+in watch mode and point ARGOS at it:
+
+```sh
+python3 tools/zorvane_player.py --host tcp/192.168.1.20:7447 watch [--frames see]
+```
+
+It relays the state of every rover, takes no seat and drops every command, so
+a spectator cannot drive anyone's rover. FPV signaling still passes, so the
+spectator can open a rover's video. Camera frames stay off unless `--frames see`.
+
 `python3 tools/zorvane_player.py --host … status` prints `match/state` and five
 round trips without joining.
 

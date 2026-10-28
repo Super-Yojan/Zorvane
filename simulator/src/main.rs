@@ -15,6 +15,7 @@ mod physics;
 mod rgb_camera;
 mod robotics_pose;
 mod session;
+mod spectator;
 mod terra;
 mod vehicle;
 mod velocity_controller;

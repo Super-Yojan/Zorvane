@@ -33,6 +33,28 @@ class PlayerTests(unittest.TestCase):
         self.assertEqual(first["mac"], player.mac("secret", "s1", first["seq"],
                                                   "terra/rover/0/teleop", b"{}"))
 
+    def test_watch_drops_commands_and_passes_fpv_signaling(self):
+        class Sample:
+            def __init__(self, key, payload=b"{}"):
+                self.key_expr, self.payload = key, self
+                self.data = payload
+
+            def to_bytes(self):
+                return self.data
+
+        args = type("Args", (), {"command": "watch", "prefix": "terra/rover", "see": "all",
+                                 "frames": "none"})()
+        remote = FakeSession()
+        relay = player.Relay(args, remote, FakeSession())
+        relay.view = {0, 1}
+        relay.warn_once = lambda text: None
+        relay.from_local(Sample("terra/rover/0/teleop"))
+        relay.from_local(Sample("terra/rover/1/goal"))
+        relay.from_local(Sample("terra/rover/1/webrtc/request"))
+        relay.from_local(Sample("terra/rover/match/control"))
+        self.assertEqual([key for key, _, _ in remote.puts], ["terra/rover/1/webrtc/request"])
+        self.assertTrue(all(attachment is None for _, _, attachment in remote.puts))
+
     def test_split_key(self):
         self.assertEqual(player.split_key("terra/rover", "terra/rover/3/goal/status"), (3, "goal/status"))
         self.assertEqual(player.split_key("terra/rover", "terra/rover/match/state"), (None, "match/state"))

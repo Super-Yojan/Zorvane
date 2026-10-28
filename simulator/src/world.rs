@@ -42,9 +42,12 @@ impl Plugin for TerraWorldPlugin {
                 brightness: 220.0,
                 ..default()
             })
-            .add_systems(PostUpdate, follow_rover.before(TransformSystems::Propagate));
+            .add_plugins(crate::spectator::SpectatorPlugin);
     }
 }
+
+/// High over the west touchline, looking across at the east bleachers.
+pub const OVERVIEW_EYE: Vec3 = Vec3::new(-75.0, 38.0, 70.0);
 
 #[derive(Resource, Clone)]
 pub struct WorldConfig {
@@ -54,6 +57,7 @@ pub struct WorldConfig {
     pub camera_offset: Vec3,
     /// Exponential camera response rate per second.
     pub camera_response: f32,
+    /// Start by following rover 0; otherwise start in free camera mode.
     pub follow_rover: bool,
 }
 
@@ -70,12 +74,11 @@ impl Default for WorldConfig {
 }
 
 impl WorldConfig {
-    /// `TERRA_NEXT_CAMERA=overview` watches the whole field instead of the rover.
+    /// `TERRA_NEXT_CAMERA=overview` starts over the whole field, in free camera mode.
     pub fn from_env() -> Self {
         let mut config = Self::default();
         if std::env::var("TERRA_NEXT_CAMERA").as_deref() == Ok("overview") {
-            // High over the west touchline, looking across at the east bleachers.
-            config.camera_offset = Vec3::new(-75.0, 38.0, 70.0);
+            config.camera_offset = OVERVIEW_EYE;
             config.follow_rover = false;
         }
         config
@@ -190,44 +193,6 @@ fn apply_session(world: &mut World) {
 
 pub(crate) fn finish_rebuild(mut commands: Commands) {
     commands.remove_resource::<crate::session::RebuildWorld>();
-}
-
-type FollowRovers<'w, 's> = Query<
-    'w,
-    's,
-    (&'static Transform, Option<&'static crate::terra::RoverSlot>),
-    (With<Rover>, Without<WorldCamera>),
->;
-
-fn follow_rover(
-    config: Res<WorldConfig>,
-    time: Res<Time>,
-    rovers: FollowRovers<'_, '_>,
-    mut cameras: Query<&mut Transform, (With<WorldCamera>, Without<Rover>)>,
-    cutscene: Option<Res<crate::cutscene::CutsceneActive>>,
-) {
-    // The NEXT intro cutscene drives the camera while it plays.
-    if cutscene.is_some() {
-        return;
-    }
-    if !config.follow_rover {
-        return;
-    }
-    // Slot zero is the primary rover; standalone single-rover scenes also work.
-    let Some((rover, _)) = rovers
-        .iter()
-        .find(|(_, slot)| slot.is_some_and(|slot| slot.0 == 0))
-        .or_else(|| rovers.single().ok())
-    else {
-        return;
-    };
-    let blend = 1.0 - (-config.camera_response * time.delta_secs()).exp();
-    for mut camera in &mut cameras {
-        camera.translation = camera
-            .translation
-            .lerp(rover.translation + config.camera_offset, blend);
-        camera.look_at(rover.translation, Vec3::Y);
-    }
 }
 
 #[cfg(test)]
