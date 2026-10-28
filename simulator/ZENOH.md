@@ -127,12 +127,13 @@ Keys are relative to the prefix: `<id>/pose` is `terra/rover/0/pose` for rover 0
 ### NEXT status
 
 ```json
-{"schema_version":1,"alliance":"red","target_bucket":"orange","state":"CARRYING BALLS","collected":3,"waiting":0,"dumper":0,"capacity":8,"dumper_capacity":2,"can_load":false,"can_dump":false}
+{"schema_version":1,"alliance":"red","target_bucket":"orange","state":"CARRYING BALLS","collected":3,"waiting":0,"dumper":0,"capacity":8,"dumper_capacity":2,"at_home_goal":false,"can_load":false,"can_dump":false}
 ```
 
 `state` is `SEARCHING`, `CARRYING BALLS`, `FULL: RETURN TO GOAL` or `WAITING FOR
 OPERATOR`. Balls in the intake are `collected`; back at the rover's own goal
-line they become `waiting`; `next/load` moves one into the `dumper`. `can_dump`
+line they become `waiting`; `next/load` moves one into the `dumper`, but only
+while the rover is still at its home goal (`at_home_goal`). `can_dump`
 is true while the dumper holds a ball and the outlet is over one of the
 alliance's ground-level buckets. The rules are in [NEXT.md](NEXT.md#loading-and-dumping).
 

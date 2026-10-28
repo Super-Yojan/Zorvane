@@ -72,13 +72,14 @@ Scoring loop:
 1. Drive over balls to collect them (the intake holds 8).
 2. Bank them: drive into your own goal mouth (|y| <= 3.2, within 1 m of your goal
    line). Collected balls become waiting. Nowhere else on the goal line counts.
-3. load_ball() moves one waiting ball into the dumper (it holds 2). It works
-   anywhere, also next to a bucket.
+3. load_ball() moves one waiting ball into the dumper (it holds 2). It only
+   works at your goal mouth, so load before you leave.
 4. approach_bucket() lines the outlet up over a ground-level bucket of your
    colour with the rover's own bucket dock; get_match_state() then reports can_dump.
 5. dump() approves the dock's dump and the gate opens. A ball that lands in the bucket scores 1 point, or 2 if the bucket is
    within 30 m of the opponent's Base. Raised buckets (1 m stands) are out of
-   reach. Repeat load_ball x2 and dump until waiting is 0.
+   reach. Go back to the goal mouth, load 2 more and dump again until waiting
+   is 0.
 
 Knocking a bucket over or sending a ball out of bounds costs 7 points under the
 real rules, so approach buckets slowly and never touch the other colour.
@@ -681,7 +682,7 @@ def build_server(rover, telemetry, field_map=None):
 
     @server.tool()
     def load_ball() -> str:
-        """Move one waiting ball into the dumper. Works anywhere once balls are waiting."""
+        """Move one waiting ball into the dumper. Only works at your goal mouth (at_home_goal)."""
         rover.put("next/load", {})
         time.sleep(0.4)
         return json.dumps(telemetry.json("next/status"))

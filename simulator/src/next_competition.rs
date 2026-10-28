@@ -446,8 +446,13 @@ impl RoverBallLoad {
             self.waiting = std::mem::take(&mut self.collected);
         }
     }
+    /// LOAD has a ball to move and room for it. The rover must also be at
+    /// its home goal, which callers check with [`at_home_goal`].
+    pub fn can_load(self) -> bool {
+        self.waiting > 0 && self.dumper < DUMPER_CAPACITY
+    }
     fn load_dumper(&mut self) -> bool {
-        if self.waiting == 0 || self.dumper >= DUMPER_CAPACITY {
+        if !self.can_load() {
             return false;
         }
         self.waiting -= 1;
@@ -1296,6 +1301,7 @@ fn operator_active(
 
 fn load_rover_once(
     rover: Entity,
+    at_goal: bool,
     load: &mut RoverBallLoad,
     carried_visuals: &Query<
         (Entity, &ChildOf, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
@@ -1303,7 +1309,7 @@ fn load_rover_once(
     >,
     commands: &mut Commands,
 ) {
-    if !load.load_dumper() {
+    if !at_goal || !load.load_dumper() {
         return;
     }
     if let Some((ball, _, mesh, material)) = carried_visuals
@@ -1328,8 +1334,9 @@ fn load_hud_clicks(
     mouse: Res<ButtonInput<MouseButton>>,
     config: Option<Res<crate::world::WorldConfig>>,
     session: Option<Res<crate::session::SimSession>>,
+    physics: Res<crate::physics::RoverPhysicsConfig>,
     buttons: Query<(&Interaction, &LoadRover), Changed<Interaction>>,
-    mut rovers: Query<&mut RoverBallLoad>,
+    mut rovers: Query<(&crate::terra::RoverSlot, &Position, &mut RoverBallLoad)>,
     carried_visuals: Query<
         (Entity, &ChildOf, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
         With<CarriedBall>,
@@ -1345,8 +1352,9 @@ fn load_hud_clicks(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        if let Ok(mut load) = rovers.get_mut(button.0) {
-            load_rover_once(button.0, &mut load, &carried_visuals, &mut commands);
+        if let Ok((slot, position, mut load)) = rovers.get_mut(button.0) {
+            let at_goal = at_home_goal(slot.0, position.0, physics.chassis_size);
+            load_rover_once(button.0, at_goal, &mut load, &carried_visuals, &mut commands);
         }
     }
 }
@@ -1426,6 +1434,10 @@ impl NextCommandKind {
 #[derive(Component, Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DumpReady(pub bool);
 
+/// Whether the rover is at its home goal, where LOAD is allowed.
+#[derive(Component, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AtHomeGoal(pub bool);
+
 impl Alliance {
     pub fn name(self) -> &'static str {
         match self {
@@ -1445,7 +1457,12 @@ impl BucketSide {
 }
 
 /// `<prefix>/<id>/next/status`: one rover's NEXT state for dashboards.
-pub fn status_json(slot: usize, load: RoverBallLoad, dump_ready: bool) -> serde_json::Value {
+pub fn status_json(
+    slot: usize,
+    load: RoverBallLoad,
+    at_goal: bool,
+    dump_ready: bool,
+) -> serde_json::Value {
     let alliance = Alliance::of_slot(slot);
     serde_json::json!({
         "schema_version": 1,
@@ -1457,7 +1474,8 @@ pub fn status_json(slot: usize, load: RoverBallLoad, dump_ready: bool) -> serde_
         "dumper": load.dumper,
         "capacity": ROVER_BALL_CAPACITY,
         "dumper_capacity": DUMPER_CAPACITY,
-        "can_load": load.waiting > 0 && load.dumper < DUMPER_CAPACITY,
+        "at_home_goal": at_goal,
+        "can_load": at_goal && load.can_load(),
         "can_dump": dump_ready,
     })
 }
@@ -1481,14 +1499,19 @@ fn track_dump_ready(
         &Rotation,
         &RoverBallLoad,
         Option<&DumpReady>,
+        Option<&AtHomeGoal>,
     )>,
     buckets: Query<(&Bucket, &BucketSide)>,
 ) {
-    for (rover, slot, position, rotation, load, previous) in &rovers {
+    for (rover, slot, position, rotation, load, previous, was_at_goal) in &rovers {
         let ready = load.dumper > 0
             && target_bucket_aligned(slot.0, position.0, rotation.0, physics.chassis_size, &buckets);
         if previous.map(|ready| ready.0) != Some(ready) {
             commands.entity(rover).insert(DumpReady(ready));
+        }
+        let at_goal = at_home_goal(slot.0, position.0, physics.chassis_size);
+        if was_at_goal.map(|at| at.0) != Some(at_goal) {
+            commands.entity(rover).insert(AtHomeGoal(at_goal));
         }
     }
 }
@@ -1532,7 +1555,8 @@ fn apply_next_commands(
         };
         match request.kind {
             NextCommandKind::Load => {
-                load_rover_once(rover, &mut load, &carried_visuals, &mut commands);
+                let at_goal = at_home_goal(slot.0, position.0, physics.chassis_size);
+                load_rover_once(rover, at_goal, &mut load, &carried_visuals, &mut commands);
             }
             NextCommandKind::Dump => {
                 if load.dumper == 0
@@ -1727,8 +1751,9 @@ fn load_world_clicks(
             }
     }
     if let Some((rover, _)) = nearest
-        && let Ok((_, _, _, _, mut load)) = rovers.get_mut(rover) {
-            load_rover_once(rover, &mut load, &carried_visuals, &mut commands);
+        && let Ok((_, slot, position, _, mut load)) = rovers.get_mut(rover) {
+            let at_goal = at_home_goal(slot.0, position.0, physics.chassis_size);
+            load_rover_once(rover, at_goal, &mut load, &carried_visuals, &mut commands);
         }
 }
 
@@ -1777,7 +1802,7 @@ fn sync_waiting_markers(
 #[derive(Default, PartialEq, Eq)]
 struct HudSnapshot {
     score: NextTeamScore,
-    rows: Vec<(Entity, u64, usize, usize, usize, bool)>,
+    rows: Vec<(Entity, u64, usize, usize, usize, bool, bool)>,
 }
 
 fn update_score_hud(
@@ -1825,6 +1850,7 @@ fn update_score_hud(
                         physics.chassis_size,
                         &buckets,
                     ),
+                at_home_goal(slot.0, position.0, physics.chassis_size),
             )
         })
         .collect();
@@ -1872,7 +1898,7 @@ fn update_score_hud(
                 },
                 TextColor(Color::WHITE),
             ));
-            for (rover, id, collected, waiting, dumper, can_dump) in &snapshot.rows {
+            for (rover, id, collected, waiting, dumper, can_dump, at_goal) in &snapshot.rows {
                 let load = RoverBallLoad {
                     collected: *collected,
                     waiting: *waiting,
@@ -1918,7 +1944,7 @@ fn update_score_hud(
                             },
                             TextColor(Color::WHITE),
                         ));
-                        if *waiting > 0 && *dumper < DUMPER_CAPACITY {
+                        if load.can_load() && *at_goal {
                             row.spawn((
                                 Button,
                                 LoadRover(*rover),
@@ -1962,6 +1988,18 @@ fn update_score_hud(
                         } else if *dumper > 0 {
                             row.spawn((
                                 Text::new("Drive to and face a bucket to dump"),
+                                TextColor(Color::WHITE),
+                                TextFont {
+                                    font_size: bevy::text::FontSize::Px(13.0),
+                                    ..default()
+                                },
+                            ));
+                        }
+                        if load.can_load() && !*at_goal {
+                            row.spawn((
+                                Text::new(format!(
+                                    "Return to home goal to load {waiting} held"
+                                )),
                                 TextColor(Color::WHITE),
                                 TextFont {
                                     font_size: bevy::text::FontSize::Px(13.0),
@@ -2309,7 +2347,7 @@ mod tests {
             .world_mut()
             .spawn((
                 crate::terra::RoverSlot(0),
-                Position(Vec3::new(0.0, 0.32, PITCH_SOUTH - 2.0)),
+                Position(Vec3::new(0.0, 0.32, PITCH_SOUTH - 0.5)),
                 RoverBallLoad {
                     collected: 0,
                     waiting: 2,
@@ -2345,6 +2383,57 @@ mod tests {
         assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().waiting, 1);
         assert_eq!(app.world().get::<RoverBallLoad>(rover).unwrap().dumper, 1);
         assert_eq!(app.world().resource::<NextTeamScore>().total(), 0);
+    }
+
+    #[test]
+    fn load_is_refused_away_from_the_home_goal() {
+        let mut app = App::new();
+        app.insert_resource(WorldConfig::default())
+            .insert_resource(RoverPhysicsConfig::default())
+            .insert_resource(ButtonInput::<MouseButton>::default())
+            .add_message::<NextCommand>()
+            .add_systems(Update, (load_hud_clicks, apply_next_commands).chain())
+            .insert_resource(Assets::<Mesh>::default())
+            .insert_resource(Assets::<StandardMaterial>::default())
+            .insert_resource(NextTeamScore::default());
+        let waiting = RoverBallLoad {
+            collected: 0,
+            waiting: 2,
+            dumper: 0,
+        };
+        // Red (slot 0) at a bucket in the Blue half, and at the wrong goal.
+        for z in [-10.0, PITCH_NORTH] {
+            let rover = app
+                .world_mut()
+                .spawn((
+                    crate::terra::RoverId(7),
+                    crate::terra::RoverSlot(0),
+                    Position(Vec3::new(0.0, 0.32, z)),
+                    Rotation(Quat::IDENTITY),
+                    waiting,
+                ))
+                .id();
+            let button = app
+                .world_mut()
+                .spawn((LoadRover(rover), Interaction::Pressed))
+                .id();
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .press(MouseButton::Left);
+            app.world_mut().write_message(NextCommand {
+                rover: 7,
+                kind: NextCommandKind::Load,
+            });
+            app.update();
+            assert_eq!(*app.world().get::<RoverBallLoad>(rover).unwrap(), waiting);
+            let chassis = RoverPhysicsConfig::default().chassis_size;
+            assert!(!at_home_goal(0, Vec3::new(0.0, 0.32, z), chassis));
+            app.world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>()
+                .clear();
+            app.world_mut().entity_mut(button).despawn();
+            app.world_mut().entity_mut(rover).despawn();
+        }
     }
 
     #[test]
@@ -2490,7 +2579,8 @@ mod tests {
                 },
             ))
             .id();
-        // Another rover's id does nothing; this one's LOAD then DUMP.
+        // Another rover's id does nothing. This one is at a bucket, far from its
+        // goal, so LOAD is refused and DUMP releases only the ball already staged.
         for (id, kind) in [
             (5, NextCommandKind::Dump),
             (4, NextCommandKind::Load),
@@ -2500,10 +2590,14 @@ mod tests {
         }
         app.update();
         let load = *app.world().get::<RoverBallLoad>(rover).unwrap();
-        assert_eq!((load.waiting, load.dumper), (0, 0));
+        assert_eq!((load.waiting, load.dumper), (1, 0));
         tick(&mut app, 180);
-        assert_eq!(app.world().resource::<NextTeamScore>().red, 2);
-        let status = status_json(0, load, false);
+        assert_eq!(app.world().resource::<NextTeamScore>().red, 1);
+        let status = status_json(0, load, false, false);
+        assert_eq!(status["state"], "WAITING FOR OPERATOR");
+        assert_eq!(status["at_home_goal"], false);
+        assert_eq!(status["can_load"], false);
+        assert_eq!(status_json(0, load, true, false)["can_load"], true);
         assert_eq!(status["alliance"], "red");
         assert_eq!(status["target_bucket"], "orange");
         assert_eq!(status["capacity"], ROVER_BALL_CAPACITY);
