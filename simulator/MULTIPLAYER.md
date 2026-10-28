@@ -27,6 +27,75 @@ flowchart LR
 *Commands are signed per seat. The host drops any command for a rover that is
 not the sender's.*
 
+## Online rooms (Play online)
+
+The easiest way. Everyone signs in to the same lobby server (the ARGOS GCP
+router by default), one player creates a room, and the others pick it from a
+list and join with the room password. No ports to open, no Python.
+
+```mermaid
+flowchart LR
+  subgraph Server["Lobby server: tls/argos.34.135.204.210.sslip.io:7448"]
+    R["Zenoh router<br/>user zorvane may only use zorvane/**"]
+  end
+  subgraph H["Host: Zorvane"]
+    Room["Create room<br/>zorvane/rooms/K7QXM (info)<br/>zorvane/room/K7QXM/rover/** (rovers)"]
+  end
+  subgraph P["Player: Zorvane"]
+    Join["Rooms list, Join<br/>relay on tcp/127.0.0.1:7447"] --- A["ARGOS / MCP / teleop<br/>prefix terra/rover"]
+  end
+  Room <--> R
+  Join <-- "signed commands, own and team state" --> R
+```
+
+1. Start menu, **Play online**. Fill in the server, user (`zorvane`), the
+   server password and your name, then **Connect**. They are saved to
+   `online.json` (`~/Library/Application Support/Zorvane/` on macOS,
+   `%APPDATA%\Zorvane\` on Windows, `~/.config/zorvane/` on Linux, mode 0600).
+2. Host: **Create room**, give it a name and an optional room password. The host
+   gets a 5-letter room code and a seat on the chosen team; the chip at the bottom
+   left has **Start match** / **Reset match**, and Esc then **Close room** ends it.
+3. Player: pick the room in the list (code, host, phase, free red/blue rovers,
+   players), type the room password, pick a team, **Join**. The game shows your
+   seat, rovers and round trip. Point ARGOS, the MCP server or `zenoh_client.py`
+   at `tcp/127.0.0.1:7447` with prefix `terra/rover`, as for a local sim.
+
+There are two passwords. The **server password** keeps strangers off the lobby
+server (see the ARGOS `packaging/gcp/README.md`, account `zorvane`). The **room
+password** is checked by the hosting game before it gives out a seat. A wrong
+one shows "Wrong room password".
+
+Without a window, or for agents:
+
+```sh
+# Host a room
+ZORVANE_SERVER_PASSWORD=… ZORVANE_ROOM="Friday match" ZORVANE_ROOM_PASSWORD=field3 cargo run -p zorvane
+# Join a room from the game, headless (its relay serves tcp/127.0.0.1:7447)
+ZORVANE_SERVER_PASSWORD=… ZORVANE_JOIN=K7QXM ZORVANE_ROOM_PASSWORD=field3 ZORVANE_TEAM=blue TERRA_HEADLESS=1 cargo run -p zorvane
+# Or with Python
+python3 tools/zorvane_player.py --password … rooms
+python3 tools/zorvane_player.py --password … --room K7QXM --code field3 --team blue --kind agent
+```
+
+| Variable | Meaning |
+| --- | --- |
+| `ZORVANE_SERVER` | Lobby server endpoint, default `tls/argos.34.135.204.210.sslip.io:7448` |
+| `ZORVANE_SERVER_USER`, `ZORVANE_SERVER_PASSWORD` | Server sign-in, default user `zorvane` |
+| `ZORVANE_ROOM`, `ZORVANE_ROOM_PASSWORD`, `ZORVANE_ROOM_CODE` | Host a room at startup (code is random if unset) |
+| `ZORVANE_JOIN`, `ZORVANE_TEAM` | Join a room at startup, headless |
+
+The host's key is still printed at startup, so `zorvane_player.py --room CODE
+control start --host-key KEY` starts a headless host's match.
+
+For your own server, run `cargo run -p zorvane-lobby -- --listen tls/0.0.0.0:7448
+--config router.json5`, a plain Zenoh router that also logs rooms opening and
+closing. Give it a `transport/auth/usrpwd` dictionary and the same
+`access_control` block the ARGOS installer writes.
+
+Not yet: FPV video across rooms (WebRTC signaling only runs on the local
+session), and room spectators. Any signed-in user can read a room's state;
+only seated players can drive.
+
 ## Host
 
 ```sh

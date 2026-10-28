@@ -12,6 +12,11 @@ pulls the state you can see across the network.
     python3 tools/zorvane_player.py --host tcp/192.168.1.20:7447 watch
     python3 tools/zorvane_player.py --host tcp/192.168.1.20:7447 status
     python3 tools/zorvane_player.py --host tcp/192.168.1.20:7447 control start --host-key KEY
+
+Online rooms on the lobby server (the same rooms as Play online in the menu):
+
+    python3 tools/zorvane_player.py --password SERVER_PW rooms
+    python3 tools/zorvane_player.py --password SERVER_PW --room K7QXM --code ROOM_PW --team blue
 """
 import argparse
 import hashlib
@@ -22,6 +27,21 @@ import threading
 import time
 
 PREFIX = "terra/rover"
+# Lobby server defaults. Same as online.rs.
+DEFAULT_SERVER = "tls/argos.34.135.204.210.sslip.io:7448"
+DEFAULT_USER = "zorvane"
+
+
+def room_prefix(code):
+    """Key prefix of an online room's rovers, as lobby.rs names it."""
+    return f"zorvane/room/{code.strip().upper()}/rover"
+
+
+def swap_prefix(key, old, new):
+    """Move a key from one rover prefix to another; keys outside `old` stay."""
+    if key == old or key.startswith(old + "/"):
+        return new + key[len(old):]
+    return key
 
 # Commands a player sends to a rover. Same list as is_command_kind in bridge.rs.
 COMMANDS = {
@@ -157,7 +177,8 @@ class Relay:
     def __init__(self, args, remote, local):
         self.args, self.remote, self.local = args, remote, local
         self.watching = args.command == "watch"
-        self.prefix = args.prefix
+        self.prefix = args.prefix  # the host's rovers
+        self.local_prefix = args.local_prefix  # what local clients use
         self.seat = None
         self.signer = None
         self.team = None
@@ -182,7 +203,10 @@ class Relay:
             raise SystemExit(f"No answer on {self.prefix}/match/join. Is the host running "
                              "Zorvane with TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447?")
         if not reply.get("ok"):
-            raise SystemExit(f"Join refused: {reply.get('error')}")
+            error = reply.get("error")
+            if self.args.room and error == "wrong join code":
+                error = "wrong room password (--code)"
+            raise SystemExit(f"Join refused: {error}")
         with self.lock:
             self.seat = reply["seat"]
             self.signer = Signer(reply["seat"], reply["secret"])
@@ -203,7 +227,7 @@ class Relay:
     # Local client -> host.
     def from_local(self, sample):
         key = str(sample.key_expr)
-        rover, kind = split_key(self.prefix, key)
+        rover, kind = split_key(self.local_prefix, key)
         if rover is None:
             if kind in ("fleet/size", "match/control"):
                 self.warn_once(f"Dropped {key}: only the host changes the fleet or the match.")
@@ -214,6 +238,7 @@ class Relay:
             mine, signer = rover in self.own, self.signer
             visible = rover in self.view
         payload = sample.payload.to_bytes()
+        key = swap_prefix(key, self.local_prefix, self.prefix)
         if self.watching and kind not in FPV_COMMANDS:
             self.warn_once(f"Dropped {key}: spectators watch and do not drive.")
         elif mine:
@@ -225,14 +250,15 @@ class Relay:
 
     # Host -> local clients.
     def forward(self, sample):
-        self.local.put(str(sample.key_expr), sample.payload.to_bytes())
+        key = swap_prefix(str(sample.key_expr), self.prefix, self.local_prefix)
+        self.local.put(key, sample.payload.to_bytes())
 
     def forward_every_rover(self, sample):
         self.forward(sample)
 
     def on_match_state(self, sample):
         payload = sample.payload.to_bytes()
-        self.local.put(str(sample.key_expr), payload)
+        self.local.put(swap_prefix(str(sample.key_expr), self.prefix, self.local_prefix), payload)
         state = json.loads(payload)
         with self.lock:
             self.match_state = state
@@ -266,7 +292,7 @@ class Relay:
         else:
             self.join(parse_rovers(self.args.rovers))
         subscribers = [
-            self.local.declare_subscriber(f"{prefix}/**", self.from_local),
+            self.local.declare_subscriber(f"{self.local_prefix}/**", self.from_local),
             self.remote.declare_subscriber(f"{prefix}/match/state", self.on_match_state),
             self.remote.declare_subscriber(f"{prefix}/next/score", self.forward),
             self.remote.declare_subscriber(f"{prefix}/fleet/state", self.forward),
@@ -308,14 +334,49 @@ class Relay:
                 subscriber.undeclare()
 
 
+def list_rooms(session, timeout=3.0):
+    """Every room's info from `zorvane/rooms/*`, sorted by name."""
+    rooms = {}
+    import zenoh
+    # Every room answers; the default target may stop at one.
+    replies = session.get("zorvane/rooms/*", target=zenoh.QueryTarget.ALL,
+                          consolidation=zenoh.ConsolidationMode.NONE, timeout=timeout)
+    for reply in replies:
+        if reply.ok is None:
+            continue
+        try:
+            room = json.loads(reply.ok.payload.to_bytes())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(room, dict) and room.get("code"):
+            rooms[room["code"]] = room
+    return sorted(rooms.values(), key=lambda room: str(room.get("name", "")).lower())
+
+
+def print_rooms(session):
+    rooms = list_rooms(session)
+    if not rooms:
+        print("No open rooms.")
+        return
+    for room in rooms:
+        free = room.get("free", {})
+        lock = "password" if room.get("password") else "open"
+        players = ", ".join(seat["name"] for seat in room.get("seats", [])) or "nobody yet"
+        print(f"{room['code']}  {room.get('name', '?')}  (host {room.get('host', '?')}, {lock}, "
+              f"{room.get('phase', '?')}) free red {free.get('red', 0)} blue {free.get('blue', 0)}; "
+              f"players: {players}")
+
+
 def main():
     import zenoh
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--host", default="tcp/127.0.0.1:7447",
-                        help="Host simulator (or Zenoh router) endpoint")
+    parser.add_argument("--host",
+                        help="Host simulator or Zenoh router endpoint (default "
+                             f"tcp/127.0.0.1:7447, or {DEFAULT_SERVER} with --room/rooms)")
     parser.add_argument("--prefix", default=PREFIX)
-    parser.add_argument("--user", help="Zenoh router user, for a hosted router")
-    parser.add_argument("--password")
+    parser.add_argument("--room", help="Online room code from `rooms`; joins through the lobby server")
+    parser.add_argument("--user", help=f"Zenoh router user (default {DEFAULT_USER} with --room/rooms)")
+    parser.add_argument("--password", help="Zenoh router password (the lobby server password)")
     parser.add_argument("--tls-ca", help="Root CA file for a tls/ router endpoint")
     sub = parser.add_subparsers(dest="command")
     join = sub.add_parser("join", help="Join and relay (the default)")
@@ -324,7 +385,7 @@ def main():
         target.add_argument("--team", choices=["red", "blue"])
         target.add_argument("--rovers", help="Count, 'all', or ids like 0,2 (default 1)")
         target.add_argument("--kind", choices=["human", "agent"], default="human")
-        target.add_argument("--code", help="Join code, if the host set ZORVANE_JOIN_CODE")
+        target.add_argument("--code", help="Room password, or the host's ZORVANE_JOIN_CODE")
         target.add_argument("--listen", default="tcp/127.0.0.1:7447",
                             help="Local endpoint for ARGOS, the MCP and teleop")
         target.add_argument("--see", choices=["own", "team", "all"], default="team",
@@ -341,15 +402,26 @@ def main():
     watch.set_defaults(see="all", team=None, rovers=None, name="spectator", kind="spectator",
                        code=None)
     sub.add_parser("status", help="Print the match state and the round trip to the host")
+    sub.add_parser("rooms", help="List the open rooms on the lobby server")
     control = sub.add_parser("control", help="Host: start, pause, resume, reset or kick")
     control.add_argument("action", choices=MATCH_ACTIONS + ["fleet"])
     control.add_argument("--count", type=int, help="Rover count for 'fleet'")
     control.add_argument("--host-key", required=True, help="Printed by Zorvane at startup")
     args = parser.parse_args()
+    online = args.room is not None or args.command == "rooms"
+    if args.host is None:
+        args.host = DEFAULT_SERVER if online else "tcp/127.0.0.1:7447"
+    if online and args.user is None:
+        args.user = DEFAULT_USER
+    args.local_prefix = args.prefix
+    if args.room:
+        args.prefix = room_prefix(args.room)
 
     remote = zenoh.open(zenoh_config(args.host, "client", args))
     try:
-        if args.command == "status":
+        if args.command == "rooms":
+            print_rooms(remote)
+        elif args.command == "status":
             times = ping(remote, args.prefix)
             print(json.dumps(read_match_state(remote, args.prefix), indent=2))
             print(f"round trip: {', '.join(f'{t:.1f}' for t in times) or 'no answer'} ms")

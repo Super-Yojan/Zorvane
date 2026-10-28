@@ -238,7 +238,12 @@ pub(crate) fn reconcile_fleet(
     // Update rebuilds the world after this schedule. Spawning now would consume
     // IDs for rovers immediately despawned by that rebuild (including rover 0).
     if rebuild.is_some()
-        || session.is_some_and(|session| session.phase == crate::session::Phase::Menu)
+        || session.is_some_and(|session| {
+            matches!(
+                session.phase,
+                crate::session::Phase::Menu | crate::session::Phase::Online
+            )
+        })
     {
         return;
     }

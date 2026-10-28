@@ -18,7 +18,7 @@ fn run_configured_file(
     shared: &Arc<Shared>,
 ) -> zenoh::Result<()> {
     let session = zenoh::open(zenoh::Config::from_file(path)?).wait()?;
-    let subscriber = subscribe(&session, &config.prefix, shared)?;
+    let subscriber = subscribe(&session, &config.prefix, shared, false)?;
     log_ready(config);
     let result = publish_loop(config, shared, Some(session.clone()), None);
     drop(subscriber);
@@ -35,7 +35,8 @@ fn run_split_sessions(
     let local = match local_spec {
         Some(spec) => {
             let session = zenoh::open(spec.to_zenoh_config()?).wait()?;
-            let subscriber = subscribe(&session, &config.prefix, shared)?;
+            let loopback = spec.listen.iter().all(|endpoint| is_loopback(endpoint));
+            let subscriber = subscribe(&session, &config.prefix, shared, loopback)?;
             info!("Terra Zenoh listening on {}", spec.listen.join(", "));
             Some((session, subscriber))
         }
@@ -124,7 +125,7 @@ fn connect_fleet(spec: ZenohLinkSpec, prefix: String, shared: Arc<Shared>, state
     info!("Terra Zenoh fleet connecting to {endpoints}{as_user}");
     let opened = spec.to_zenoh_config().and_then(|config| {
         zenoh::open(config).wait().and_then(|session| {
-            subscribe(&session, &prefix, &shared).map(|subscriber| (session, subscriber))
+            subscribe(&session, &prefix, &shared, false).map(|subscriber| (session, subscriber))
         })
     });
     match opened {
@@ -151,7 +152,18 @@ struct Inbox {
     _ping: zenoh::query::Queryable<()>,
 }
 
-fn subscribe(session: &zenoh::Session, prefix: &str, shared: &Arc<Shared>) -> zenoh::Result<Inbox> {
+/// Only a listener on this machine may stand in for the host player's seat.
+fn is_loopback(endpoint: &str) -> bool {
+    let address = endpoint.split_once('/').map_or(endpoint, |(_, rest)| rest);
+    address.starts_with("127.") || address.starts_with("[::1]") || address.starts_with("localhost:")
+}
+
+fn subscribe(
+    session: &zenoh::Session,
+    prefix: &str,
+    shared: &Arc<Shared>,
+    local: bool,
+) -> zenoh::Result<Inbox> {
     let incoming = shared.clone();
     let owned_prefix = prefix.to_owned();
     let commands = session
@@ -163,6 +175,7 @@ fn subscribe(session: &zenoh::Session, prefix: &str, shared: &Arc<Shared>) -> ze
                 sample.key_expr().as_str(),
                 sample.payload().to_bytes().as_ref(),
                 attachment.as_deref(),
+                local,
             );
         })
         .wait()?;
@@ -199,8 +212,11 @@ fn publish_loop(
     shared.connected.store(true, Ordering::Release);
     let mut occupancy_baselines = BTreeMap::<u64, OccupancyBaseline>::new();
     let mut noted_partial = false;
+    let mut room = RoomLink::default();
+    let local = local.map(|session| (session, config.prefix.clone()));
     while !shared.stop.load(Ordering::Acquire) {
-        let sessions = active_sessions(local.as_ref(), fleet);
+        room.sync(shared);
+        let sessions = active_sessions(local.as_ref(), fleet, &config.prefix, &room);
         if sessions.is_empty() {
             std::thread::sleep(Duration::from_millis(5));
             continue;
@@ -212,7 +228,7 @@ fn publish_loop(
             }
             publish_each(
                 &sessions,
-                format!("{}/{id}/camera/{kind}", config.prefix),
+                format!("{id}/camera/{kind}"),
                 payload,
                 zenoh::bytes::Encoding::APPLICATION_OCTET_STREAM,
                 Some(zenoh::qos::CongestionControl::Drop),
@@ -222,7 +238,7 @@ fn publish_loop(
         if let Some(state) = outgoing.fleet {
             publish_each(
                 &sessions,
-                format!("{}/fleet/state", config.prefix),
+                "fleet/state".to_owned(),
                 state,
                 zenoh::bytes::Encoding::APPLICATION_JSON,
                 Some(zenoh::qos::CongestionControl::Drop),
@@ -232,7 +248,7 @@ fn publish_loop(
         if let Some(state) = outgoing.match_state {
             publish_each(
                 &sessions,
-                format!("{}/match/state", config.prefix),
+                "match/state".to_owned(),
                 state,
                 zenoh::bytes::Encoding::APPLICATION_JSON,
                 Some(zenoh::qos::CongestionControl::Drop),
@@ -242,7 +258,7 @@ fn publish_loop(
         if let Some(score) = outgoing.next_score {
             publish_each(
                 &sessions,
-                format!("{}/next/score", config.prefix),
+                "next/score".to_owned(),
                 score,
                 zenoh::bytes::Encoding::APPLICATION_JSON,
                 Some(zenoh::qos::CongestionControl::Drop),
@@ -256,7 +272,7 @@ fn publish_loop(
             if live.contains(&id) {
                 publish_each(
                     &sessions,
-                    format!("{}/{id}/{kind}", config.prefix),
+                    format!("{id}/{kind}"),
                     payload,
                     zenoh::bytes::Encoding::APPLICATION_JSON,
                     None,
@@ -268,7 +284,7 @@ fn publish_loop(
             if live.contains(&id) {
                 publish_each(
                     &sessions,
-                    format!("{}/{id}/map/occupancy", config.prefix),
+                    format!("{id}/map/occupancy"),
                     publication.payload,
                     zenoh::bytes::Encoding::APPLICATION_JSON,
                     None,
@@ -283,7 +299,7 @@ fn publish_loop(
             {
                 publish_each(
                     &sessions,
-                    format!("{}/{id}/map/occupancy/heartbeat", config.prefix),
+                    format!("{id}/map/occupancy/heartbeat"),
                     serde_json::to_vec(baseline).unwrap(),
                     zenoh::bytes::Encoding::APPLICATION_JSON,
                     None,
@@ -296,7 +312,7 @@ fn publish_loop(
                 for report in reports {
                     publish_each(
                         &sessions,
-                        format!("{}/{id}/search/report", config.prefix),
+                        format!("{id}/search/report"),
                         report,
                         zenoh::bytes::Encoding::APPLICATION_JSON,
                         None,
@@ -311,7 +327,7 @@ fn publish_loop(
             }
             publish_each(
                 &sessions,
-                format!("{}/{id}/goal/status", config.prefix),
+                format!("{id}/goal/status"),
                 payload,
                 zenoh::bytes::Encoding::APPLICATION_JSON,
                 Some(zenoh::qos::CongestionControl::Drop),
@@ -324,7 +340,7 @@ fn publish_loop(
             }
             publish_each(
                 &sessions,
-                format!("{}/{id}/pose", config.prefix),
+                format!("{id}/pose"),
                 payload,
                 zenoh::bytes::Encoding::APPLICATION_JSON,
                 Some(zenoh::qos::CongestionControl::Drop),
@@ -333,13 +349,17 @@ fn publish_loop(
         }
         std::thread::sleep(Duration::from_millis(5));
     }
+    room.close();
     Ok(())
 }
 
+/// Every open session with the prefix it publishes under.
 fn active_sessions(
-    local: Option<&zenoh::Session>,
+    local: Option<&(zenoh::Session, String)>,
     fleet: Option<&FleetState>,
-) -> Vec<zenoh::Session> {
+    prefix: &str,
+    room: &RoomLink,
+) -> Vec<(zenoh::Session, String)> {
     let mut sessions = Vec::new();
     if let Some(session) = local {
         sessions.push(session.clone());
@@ -347,13 +367,132 @@ fn active_sessions(
     if let Some(fleet) = fleet
         && let Some(session) = fleet.session.lock().unwrap().clone()
     {
-        sessions.push(session);
+        sessions.push((session, prefix.to_owned()));
+    }
+    if let Some(open) = &room.open {
+        sessions.push((open.session.clone(), open.prefix.clone()));
     }
     sessions
 }
 
+/// The hosted room's session on the lobby server. Connecting runs on its own
+/// thread so a slow TLS handshake never stalls the local listener.
+#[derive(Default)]
+struct RoomLink {
+    spec: Option<RoomSpec>,
+    pending: Option<Arc<Mutex<Option<Result<OpenRoom, String>>>>>,
+    open: Option<OpenRoom>,
+}
+
+struct OpenRoom {
+    session: zenoh::Session,
+    prefix: String,
+    _inbox: Inbox,
+    _info: zenoh::query::Queryable<()>,
+    _token: zenoh::liveliness::LivelinessToken,
+}
+
+impl RoomLink {
+    fn sync(&mut self, shared: &Arc<Shared>) {
+        let wanted = shared.room.lock().unwrap().wanted.clone();
+        if wanted != self.spec {
+            self.close();
+            self.spec = wanted.clone();
+            if let Some(spec) = wanted {
+                let slot = Arc::new(Mutex::new(None));
+                self.pending = Some(slot.clone());
+                let shared = shared.clone();
+                std::thread::Builder::new()
+                    .name("zorvane-room".into())
+                    .spawn(move || {
+                        let result = open_room(&spec, &shared).map_err(|error| {
+                            redact(&error.to_string(), spec.server_password.as_deref())
+                        });
+                        *slot.lock().unwrap() = Some(result);
+                    })
+                    .expect("could not start room thread");
+            }
+        }
+        let finished = self
+            .pending
+            .as_ref()
+            .and_then(|slot| slot.lock().unwrap().take());
+        if let Some(result) = finished {
+            self.pending = None;
+            let mut room = shared.room.lock().unwrap();
+            // The menu may have closed or replaced the room while it connected.
+            if room.wanted != self.spec {
+                return;
+            }
+            match result {
+                Ok(open) => {
+                    info!("Zorvane room open under {}", open.prefix);
+                    room.status = RoomStatus::Open;
+                    self.open = Some(open);
+                }
+                Err(error) => {
+                    warn!("Zorvane room failed: {error}");
+                    room.status = RoomStatus::Failed(error);
+                }
+            }
+        }
+    }
+
+    fn close(&mut self) {
+        self.pending = None;
+        if let Some(open) = self.open.take() {
+            let OpenRoom { session, .. } = open;
+            if let Err(error) = session.close().wait() {
+                debug!("closing the room session: {error}");
+            }
+        }
+        self.spec = None;
+    }
+}
+
+fn open_room(spec: &RoomSpec, shared: &Arc<Shared>) -> zenoh::Result<OpenRoom> {
+    let link = ZenohLinkSpec {
+        mode: "client",
+        listen: Vec::new(),
+        connect: vec![spec.server.clone()],
+        user: spec.user.clone(),
+        password: spec.server_password.clone(),
+        tls_root_ca: None,
+        exit_on_connect_failure: true,
+    };
+    let session = zenoh::open(link.to_zenoh_config()?).wait()?;
+    let prefix = crate::lobby::room_prefix(&spec.meta.code);
+    let inbox = subscribe(&session, &prefix, shared, false)?;
+    let info = shared.clone();
+    let _info = session
+        .declare_queryable(format!("{}/{}", crate::lobby::ROOMS, spec.meta.code))
+        .callback(move |query| {
+            let body = info.room_info.lock().unwrap().clone();
+            if body.is_empty() {
+                return;
+            }
+            let key = query.key_expr().clone();
+            if let Err(error) = query.reply(key, body).wait() {
+                debug!("room info reply failed: {error}");
+            }
+        })
+        .wait()?;
+    let _token = session
+        .liveliness()
+        .declare_token(format!("{}/{}", crate::lobby::ROOMS, spec.meta.code))
+        .wait()?;
+    Ok(OpenRoom {
+        session,
+        prefix,
+        _inbox: inbox,
+        _info,
+        _token,
+    })
+}
+
+/// Publishes `key` (relative to each session's prefix) on every session.
 fn publish_each(
-    sessions: &[zenoh::Session],
+    sessions: &[(zenoh::Session, String)],
     key: String,
     payload: Vec<u8>,
     encoding: zenoh::bytes::Encoding,
@@ -362,7 +501,8 @@ fn publish_each(
 ) -> zenoh::Result<()> {
     let mut delivered = false;
     let mut failure = None;
-    for session in sessions {
+    for (session, prefix) in sessions {
+        let key = format!("{prefix}/{key}");
         let result = if let Some(congestion) = congestion {
             session
                 .put(key.as_str(), payload.clone())

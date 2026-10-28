@@ -9,6 +9,9 @@ pub enum Phase {
     Menu,
     Playing,
     Paused,
+    /// Joined someone else's online room: no local field; ARGOS drives over
+    /// the in-app relay.
+    Online,
 }
 
 #[derive(Resource, Clone, Debug)]

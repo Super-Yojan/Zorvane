@@ -11,12 +11,12 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::{Duration, Instant};
 #[cfg(test)]
 use terra_waypoint::GoalCommand;
 use terra_waypoint::encode_status;
 #[cfg(test)]
 use terra_waypoint::{GoalState, WaypointConfig, WaypointController};
-use std::time::{Duration, Instant};
 use zenoh::Wait;
 #[path = "native_bridge.rs"]
 mod native;
@@ -254,7 +254,8 @@ impl Plugin for SimulatorBridgePlugin {
         self.config
             .validate()
             .expect("invalid Terra Zenoh configuration");
-        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        let lobby =
+            crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
         match lobby.mode {
             crate::lobby::Mode::Open => info!(
                 "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
@@ -269,21 +270,13 @@ impl Plugin for SimulatorBridgePlugin {
             lobby: Mutex::new(crate::lobby::Lobby::new(lobby)),
             ..Shared::default()
         });
-        {
-            let thread_shared = shared.clone();
-            let config = self.config.clone();
-            std::thread::Builder::new()
-                .name("terra-zenoh".into())
-                .spawn(move || {
-                    if let Err(error) = run_transport(&config, &thread_shared) {
-                        warn!("Terra Zenoh transport stopped: {error}");
-                    }
-                    thread_shared.connected.store(false, Ordering::Release);
-                })
-                .expect("could not start Zenoh worker");
-        }
+        let transport = Mutex::new(Some(start_transport(&self.config, &shared)));
         app.insert_resource(self.config.clone())
-            .insert_resource(Bridge { shared })
+            .insert_resource(Bridge {
+                shared,
+                config: self.config.clone(),
+                transport,
+            })
             .add_systems(
                 PreUpdate,
                 (
@@ -291,10 +284,16 @@ impl Plugin for SimulatorBridgePlugin {
                     claim_rovers.after(crate::terra::reconcile_fleet),
                 ),
             )
+            .add_systems(Startup, host_room_from_env)
             .add_systems(FixedUpdate, drive_autonomy)
             .add_systems(
                 Update,
-                (publish_frames, forward_next_commands, publish_next_state, run_lobby),
+                (
+                    publish_frames,
+                    forward_next_commands,
+                    publish_next_state,
+                    run_lobby,
+                ),
             );
         if !app
             .world()
@@ -304,6 +303,48 @@ impl Plugin for SimulatorBridgePlugin {
         }
     }
 }
+fn start_transport(config: &BridgeConfig, shared: &Arc<Shared>) -> std::thread::JoinHandle<()> {
+    let thread_shared = shared.clone();
+    let config = config.clone();
+    std::thread::Builder::new()
+        .name("terra-zenoh".into())
+        .spawn(move || {
+            if let Err(error) = run_transport(&config, &thread_shared) {
+                warn!("Terra Zenoh transport stopped: {error}");
+            }
+            thread_shared.connected.store(false, Ordering::Release);
+        })
+        .expect("could not start Zenoh worker")
+}
+
+/// A room to open on a lobby server, from the menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoomSpec {
+    pub server: String,
+    pub user: Option<String>,
+    pub server_password: Option<String>,
+    /// Players must send this to join. `meta.password` says whether one is set.
+    pub room_password: Option<String>,
+    pub meta: crate::lobby::RoomMeta,
+    /// The host's own seat: their name and team. None for a headless server.
+    pub player: Option<(String, crate::lobby::Team)>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RoomStatus {
+    #[default]
+    Closed,
+    Connecting,
+    Open,
+    Failed(String),
+}
+
+#[derive(Default)]
+struct RoomControl {
+    wanted: Option<RoomSpec>,
+    status: RoomStatus,
+}
+
 #[derive(Default)]
 struct Outgoing {
     frames: BTreeMap<(u64, &'static str), Vec<u8>>,
@@ -382,6 +423,12 @@ struct Shared {
     /// Signed `match/control` actions and seats that sent `match/leave`.
     match_actions: Mutex<Vec<crate::lobby::MatchAction>>,
     left_seats: Mutex<Vec<String>>,
+    /// The online room the menu asked for, and how its connection is going.
+    room: Mutex<RoomControl>,
+    /// Latest answer to `zorvane/rooms/<code>`.
+    room_info: Mutex<Vec<u8>>,
+    /// The host's own seat, taken once the field has their team's rovers.
+    pending_local_seat: Mutex<Option<(String, crate::lobby::Team)>>,
     /// Refusals already logged, so a misbehaving client logs once per kind.
     refusals_logged: Mutex<std::collections::BTreeSet<String>>,
     outgoing: Mutex<Outgoing>,
@@ -391,11 +438,20 @@ struct Shared {
 impl Shared {
     #[cfg(test)]
     fn receive(&self, prefix: &str, key: &str, bytes: &[u8]) {
-        self.receive_signed(prefix, key, bytes, None);
+        self.receive_signed(prefix, key, bytes, None, false);
     }
 
-    /// One command sample. `attachment` is the seat signature, if any.
-    fn receive_signed(&self, prefix: &str, key: &str, bytes: &[u8], attachment: Option<&[u8]>) {
+    /// One command sample. `attachment` is the seat signature, if any. `local`
+    /// samples came through a loopback listener: on a hosted room, unsigned
+    /// ones count as the host player's seat.
+    fn receive_signed(
+        &self,
+        prefix: &str,
+        key: &str,
+        bytes: &[u8],
+        attachment: Option<&[u8]>,
+        local: bool,
+    ) {
         if bytes.len() > 2048 {
             return;
         }
@@ -418,6 +474,7 @@ impl Shared {
         }
         let mut lobby = self.lobby.lock().unwrap();
         let signer = match lobby.verify(key, bytes, attachment, Instant::now()) {
+            Ok(None) if local => lobby.local_seat().map(str::to_owned),
             Ok(signer) => signer,
             Err(refusal) => {
                 drop(lobby);
@@ -461,8 +518,7 @@ impl Shared {
             return;
         };
         let id = id.expect("checked above");
-        let stop = kind == "safety"
-            && crate::control_queue::is_stop_request(bytes);
+        let stop = kind == "safety" && crate::control_queue::is_stop_request(bytes);
         if let Err(refusal) = lobby.authorize(id, signer.as_deref(), stop) {
             drop(lobby);
             self.refuse(key, refusal);
@@ -511,7 +567,7 @@ impl Shared {
     }
 }
 /// Rover command topics: the Terra control contract plus NEXT load and dump.
-fn is_command_kind(kind: &str) -> bool {
+pub(crate) fn is_command_kind(kind: &str) -> bool {
     crate::next_competition::NextCommandKind::from_topic(kind).is_some()
         || matches!(
             kind,
@@ -531,12 +587,84 @@ fn is_command_kind(kind: &str) -> bool {
         )
 }
 #[derive(Resource)]
-struct Bridge {
+pub(crate) struct Bridge {
     shared: Arc<Shared>,
+    config: BridgeConfig,
+    transport: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 impl Drop for Bridge {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
+    }
+}
+impl Bridge {
+    /// A bridge without a transport thread, for tests.
+    #[cfg(test)]
+    fn detached(shared: Arc<Shared>) -> Self {
+        Self {
+            shared,
+            config: BridgeConfig::default(),
+            transport: Mutex::new(None),
+        }
+    }
+
+    /// Opens an online room on a lobby server. The local listener keeps
+    /// working; the room is a second session under the room's prefix.
+    pub fn host_room(&self, spec: RoomSpec) {
+        self.shared
+            .lobby
+            .lock()
+            .unwrap()
+            .host_room(spec.room_password.clone());
+        *self.shared.pending_local_seat.lock().unwrap() = spec.player.clone();
+        let mut room = self.shared.room.lock().unwrap();
+        room.wanted = Some(spec);
+        room.status = RoomStatus::Connecting;
+    }
+
+    pub fn close_room(&self) {
+        let mut room = self.shared.room.lock().unwrap();
+        room.wanted = None;
+        room.status = RoomStatus::Closed;
+        drop(room);
+        *self.shared.pending_local_seat.lock().unwrap() = None;
+        self.shared.lobby.lock().unwrap().close_room();
+    }
+
+    pub fn room_status(&self) -> RoomStatus {
+        self.shared.room.lock().unwrap().status.clone()
+    }
+
+    /// Match phase, seats and the local seat, for the in-game room chip.
+    pub fn match_summary(&self) -> (crate::lobby::Phase, usize, Option<String>) {
+        let lobby = self.shared.lobby.lock().unwrap();
+        (
+            lobby.phase,
+            lobby.seat_count(),
+            lobby.local_seat().map(str::to_owned),
+        )
+    }
+
+    /// A host action from the menu. Same as a signed `match/control`.
+    pub fn match_action(&self, action: crate::lobby::MatchAction) {
+        self.shared.match_actions.lock().unwrap().push(action);
+    }
+
+    /// Frees the local listener for an in-app player relay. Blocks until the
+    /// transport has closed its sessions.
+    pub fn suspend(&self) {
+        self.shared.stop.store(true, Ordering::Release);
+        if let Some(handle) = self.transport.lock().unwrap().take() {
+            let _ = handle.join();
+        }
+    }
+
+    pub fn resume(&self) {
+        let mut transport = self.transport.lock().unwrap();
+        if transport.is_none() {
+            self.shared.stop.store(false, Ordering::Release);
+            *transport = Some(start_transport(&self.config, &self.shared));
+        }
     }
 }
 #[derive(Component)]
@@ -567,18 +695,18 @@ fn publish_next_state(
     )>,
 ) {
     let now = time.elapsed_secs_f64();
-    if now - *last < 0.2
-        || config.is_none()
-    {
+    if now - *last < 0.2 || config.is_none() {
         return;
     }
     *last = now;
     let mut outgoing = bridge.shared.outgoing.lock().unwrap();
     for (id, slot, load, ready) in &rovers {
-        let status = crate::next_competition::status_json(slot.0, *load, ready.is_some_and(|r| r.0));
-        outgoing
-            .states
-            .insert((id.0, "next/status".into()), serde_json::to_vec(&status).unwrap());
+        let status =
+            crate::next_competition::status_json(slot.0, *load, ready.is_some_and(|r| r.0));
+        outgoing.states.insert(
+            (id.0, "next/status".into()),
+            serde_json::to_vec(&status).unwrap(),
+        );
     }
     if let Some(score) = score {
         let score = crate::next_competition::score_json(*score);
@@ -618,10 +746,16 @@ fn run_lobby(
     {
         let mut lobby = shared.lobby.lock().unwrap();
         for query in joins {
-            let body = query.payload().map(|bytes| bytes.to_bytes().into_owned()).unwrap_or_default();
+            let body = query
+                .payload()
+                .map(|bytes| bytes.to_bytes().into_owned())
+                .unwrap_or_default();
             let reply = match lobby.join(&body, &fleet, now) {
                 Ok(reply) => {
-                    info!("Zorvane multiplayer: {} joined as seat {}", reply["rovers"], reply["seat"]);
+                    info!(
+                        "Zorvane multiplayer: {} joined as seat {}",
+                        reply["rovers"], reply["seat"]
+                    );
                     reply
                 }
                 Err(error) => serde_json::json!({"ok": false, "error": error}),
@@ -634,8 +768,15 @@ fn run_lobby(
         for seat in &left {
             freed.extend(lobby.leave(seat));
         }
+        let seats = lobby.seat_count();
         let expired = lobby.expire(now);
-        changed |= !expired.is_empty();
+        if lobby.seat_count() < seats {
+            info!(
+                "Zorvane multiplayer: {} seat(s) timed out",
+                seats - lobby.seat_count()
+            );
+        }
+        changed |= !expired.is_empty() || lobby.seat_count() < seats;
         freed.extend(expired);
         for action in actions {
             freed.extend(lobby.apply(action, now));
@@ -662,15 +803,41 @@ fn run_lobby(
                     };
                     session.ui_epoch = session.ui_epoch.wrapping_add(1);
                 } else if let Some(clock) = clock.as_mut() {
-                    if playing { clock.unpause() } else { clock.pause() }
+                    if playing {
+                        clock.unpause()
+                    } else {
+                        clock.pause()
+                    }
                 }
             }
+        }
+        let pending = shared.pending_local_seat.lock().unwrap().clone();
+        if let Some((name, team)) = pending
+            && fleet.iter().any(|(_, t)| *t == team)
+        {
+            match lobby.seat_local(&name, team, &fleet, now) {
+                Ok(seat) => info!("Zorvane multiplayer: you play as seat {seat}"),
+                Err(error) => warn!("Zorvane multiplayer: could not seat you: {error}"),
+            }
+            *shared.pending_local_seat.lock().unwrap() = None;
+            changed = true;
         }
         let due = last_publish.is_none_or(|last| now - last >= Duration::from_secs(1));
         if changed || due {
             *last_publish = Some(now);
             let state = lobby.state_json(&fleet, now);
             shared.outgoing.lock().unwrap().match_state = Some(serde_json::to_vec(&state).unwrap());
+            let room = shared
+                .room
+                .lock()
+                .unwrap()
+                .wanted
+                .as_ref()
+                .map(|spec| spec.meta.clone());
+            if let Some(room) = room {
+                *shared.room_info.lock().unwrap() =
+                    serde_json::to_vec(&lobby.room_info(&room, &fleet, now)).unwrap();
+            }
         }
     }
     // A freed rover drops its latched goal; its teleop lease runs out by itself.
@@ -685,6 +852,44 @@ fn run_lobby(
             );
         }
     }
+}
+/// `ZORVANE_ROOM=<name>` opens a room on `ZORVANE_SERVER` at startup, for a
+/// headless host. `ZORVANE_ROOM_PASSWORD` and `ZORVANE_ROOM_CODE` are optional.
+fn host_room_from_env(bridge: Res<Bridge>) {
+    let env = |key: &str| {
+        std::env::var(key)
+            .ok()
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+    };
+    let Some(name) = env("ZORVANE_ROOM") else {
+        return;
+    };
+    let settings = crate::online::OnlineSettings::load();
+    let code = env("ZORVANE_ROOM_CODE")
+        .filter(|code| {
+            (3..=12).contains(&code.len()) && code.bytes().all(|b| b.is_ascii_alphanumeric())
+        })
+        .map(|code| code.to_ascii_uppercase())
+        .unwrap_or_else(crate::lobby::room_code);
+    let password = env("ZORVANE_ROOM_PASSWORD");
+    info!(
+        "Zorvane room \"{name}\" (code {code}) on {}",
+        settings.server
+    );
+    bridge.host_room(RoomSpec {
+        server: settings.server.trim().to_owned(),
+        user: Some(settings.user.trim().to_owned()).filter(|user| !user.is_empty()),
+        server_password: Some(settings.password.clone()).filter(|p| !p.is_empty()),
+        meta: crate::lobby::RoomMeta {
+            code,
+            host: settings.name.trim().to_owned(),
+            password: password.is_some(),
+            name,
+        },
+        room_password: password,
+        player: None,
+    });
 }
 fn receive_fleet_request(bridge: Res<Bridge>, fleet: Option<ResMut<RoverFleet>>) {
     if let Some(count) = bridge.shared.fleet_request.lock().unwrap().take()
@@ -1098,16 +1303,43 @@ mod tests {
         config.built_configs().unwrap()
     }
 
-    fn mount_replay_runtimes(mut commands:Commands,rovers:Query<(Entity,Option<&Transform>),(With<Rover>,Without<crate::velocity_controller::VelocityControlState>)>){
-        for(entity,transform)in &rovers{
-            let rt=terra_runtime::Runtime::new(terra_runtime::RuntimeConfig{mode:terra_runtime::ActuationMode::DirectEffort,..default()},"test".into()).unwrap();
-            commands.entity(entity).insert(crate::velocity_controller::VelocityControlState::new(rt));
-            if transform.is_none(){commands.entity(entity).insert(Transform::default());}
+    fn mount_replay_runtimes(
+        mut commands: Commands,
+        rovers: Query<
+            (Entity, Option<&Transform>),
+            (
+                With<Rover>,
+                Without<crate::velocity_controller::VelocityControlState>,
+            ),
+        >,
+    ) {
+        for (entity, transform) in &rovers {
+            let rt = terra_runtime::Runtime::new(
+                terra_runtime::RuntimeConfig {
+                    mode: terra_runtime::ActuationMode::DirectEffort,
+                    ..default()
+                },
+                "test".into(),
+            )
+            .unwrap();
+            commands
+                .entity(entity)
+                .insert(crate::velocity_controller::VelocityControlState::new(rt));
+            if transform.is_none() {
+                commands.entity(entity).insert(Transform::default());
+            }
         }
     }
-    fn publish_bound_drive(app:&App,client:&zenoh::Session,id:u64,linear:f64,angular:f64,sequence:u64){
-        let shared=&app.world().resource::<Bridge>().shared;
-        if let Some((run,revision))=shared.authorities.lock().unwrap().get(&id){
+    fn publish_bound_drive(
+        app: &App,
+        client: &zenoh::Session,
+        id: u64,
+        linear: f64,
+        angular: f64,
+        sequence: u64,
+    ) {
+        let shared = &app.world().resource::<Bridge>().shared;
+        if let Some((run, revision)) = shared.authorities.lock().unwrap().get(&id) {
             client.put(format!("terra/rover/{id}/teleop"),serde_json::json!({"linear":linear,"angular":angular,"run_id":run,"authority_revision":revision,"operator_session_id":"live-test","sequence":sequence}).to_string()).wait().unwrap();
         }
     }
@@ -1342,8 +1574,14 @@ mod tests {
         assert_eq!(
             *shared.next_commands.lock().unwrap(),
             vec![
-                NextCommand { rover: 0, kind: NextCommandKind::Load },
-                NextCommand { rover: 0, kind: NextCommandKind::Dump },
+                NextCommand {
+                    rover: 0,
+                    kind: NextCommandKind::Load
+                },
+                NextCommand {
+                    rover: 0,
+                    kind: NextCommandKind::Dump
+                },
             ]
         );
         assert!(shared.actions.lock().unwrap().is_empty());
@@ -1580,7 +1818,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(SimulatorBridgePlugin { config })
-            .add_systems(PreUpdate,mount_replay_runtimes);
+            .add_systems(PreUpdate, mount_replay_runtimes);
         let rover = app
             .world_mut()
             .spawn((
@@ -1670,11 +1908,11 @@ mod tests {
         let mut received_rgb = false;
         let mut received_depth = false;
         let mut moved = false;
-        let mut sequence=0;
+        let mut sequence = 0;
         while Instant::now() < deadline && !(received_rgb && received_depth && moved) {
-            sequence+=1;
+            sequence += 1;
             if python.is_none() {
-                publish_bound_drive(&app,&client,0,1.0,0.25,sequence);
+                publish_bound_drive(&app, &client, 0, 1.0, 0.25, sequence);
             }
             // Force new frames to cover discovery without retaining old samples.
             app.world_mut()
@@ -1707,7 +1945,16 @@ mod tests {
         }
         assert!(
             received_rgb && received_depth && moved,
-            "RGB={received_rgb}, depth={received_depth}, drove={moved}, output={:?}, authority={:?}", app.world().get::<crate::velocity_controller::VelocityControlState>(rover).map(|c| c.runtime.autonomy_json.clone()), app.world().resource::<Bridge>().shared.authorities.lock().unwrap()
+            "RGB={received_rgb}, depth={received_depth}, drove={moved}, output={:?}, authority={:?}",
+            app.world()
+                .get::<crate::velocity_controller::VelocityControlState>(rover)
+                .map(|c| c.runtime.autonomy_json.clone()),
+            app.world()
+                .resource::<Bridge>()
+                .shared
+                .authorities
+                .lock()
+                .unwrap()
         );
         if let Some(python) = python.as_mut() {
             assert!(
@@ -1716,7 +1963,10 @@ mod tests {
             );
         }
         assert!(app.world().get::<KeyboardControlled>(rover).is_none());
-        for _ in 0..65 {std::thread::sleep(Duration::from_millis(10));app.update();}
+        for _ in 0..65 {
+            std::thread::sleep(Duration::from_millis(10));
+            app.update();
+        }
         assert_eq!(app.world().get::<DriveCommand>(rover).unwrap().linear, 0.0);
         assert_eq!(app.world().get::<DriveCommand>(rover).unwrap().angular, 0.0);
         client.close().wait().unwrap();
@@ -1733,7 +1983,8 @@ mod tests {
     #[test]
     fn drive_commands_are_isolated_between_rovers() {
         let mut app = App::new();
-        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        let lobby =
+            crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
         match lobby.mode {
             crate::lobby::Mode::Open => info!(
                 "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
@@ -1759,7 +2010,7 @@ mod tests {
                 Instant::now(),
             )),
         );
-        app.insert_resource(Bridge { shared })
+        app.insert_resource(Bridge::detached(shared))
             .insert_resource(BridgeConfig::default())
             .add_systems(FixedUpdate, apply_remote_commands);
         let first = app
@@ -1786,7 +2037,8 @@ mod tests {
     }
     #[test]
     fn waypoint_goal_drives_north_and_publishes_status() {
-        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        let lobby =
+            crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
         match lobby.mode {
             crate::lobby::Mode::Open => info!(
                 "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
@@ -1816,11 +2068,9 @@ mod tests {
             },
         );
         let mut app = App::new();
-        app.insert_resource(Bridge {
-            shared: shared.clone(),
-        })
-        .insert_resource(BridgeConfig::default())
-        .add_systems(FixedUpdate, drive_goals);
+        app.insert_resource(Bridge::detached(shared.clone()))
+            .insert_resource(BridgeConfig::default())
+            .add_systems(FixedUpdate, drive_goals);
         app.world_mut().spawn((
             Rover,
             RoverId(0),
@@ -1862,7 +2112,8 @@ mod tests {
         ] {
             assert!(decode_fleet_request(input).is_none());
         }
-        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        let lobby =
+            crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
         match lobby.mode {
             crate::lobby::Mode::Open => info!(
                 "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
@@ -1879,7 +2130,7 @@ mod tests {
         });
         *shared.fleet_request.lock().unwrap() = Some(3);
         let mut app = App::new();
-        app.insert_resource(Bridge { shared })
+        app.insert_resource(Bridge::detached(shared))
             .init_resource::<RoverFleet>()
             .add_systems(Update, receive_fleet_request);
         app.update();
@@ -1896,7 +2147,10 @@ mod tests {
             .insert_resource(crate::terra::DriveConfig::default())
             .insert_resource(crate::physics::RoverPhysicsConfig::default())
             .init_resource::<RoverFleet>()
-            .add_systems(PreUpdate,mount_replay_runtimes.after(crate::terra::reconcile_fleet))
+            .add_systems(
+                PreUpdate,
+                mount_replay_runtimes.after(crate::terra::reconcile_fleet),
+            )
             .add_systems(PreUpdate, crate::terra::reconcile_fleet)
             .add_plugins(SimulatorBridgePlugin {
                 config: BridgeConfig {
@@ -1942,7 +2196,7 @@ mod tests {
                     .wait()
                     .unwrap();
                 app.update();
-                    while let Ok(Some(state)) = states.try_recv() {
+                while let Ok(Some(state)) = states.try_recv() {
                     let state: serde_json::Value =
                         serde_json::from_slice(&state.payload().to_bytes()).unwrap();
                     acknowledged |= state["count"] == target;
@@ -1971,13 +2225,13 @@ mod tests {
             }
             if target == 3 {
                 let mut independent = false;
-                let mut sequence=0;
+                let mut sequence = 0;
                 while Instant::now() < deadline {
-                    sequence+=1;
-                    publish_bound_drive(&app,&client,0,1.0,0.0,sequence);
-                    publish_bound_drive(&app,&client,1,-1.0,0.5,sequence);
+                    sequence += 1;
+                    publish_bound_drive(&app, &client, 0, 1.0, 0.0, sequence);
+                    publish_bound_drive(&app, &client, 1, -1.0, 0.5, sequence);
                     app.update();
-                            let world = app.world_mut();
+                    let world = app.world_mut();
                     let mut requests: Vec<_> = world
                         .query_filtered::<(&RoverId, &DriveCommand), With<Rover>>()
                         .iter(world)
@@ -1990,7 +2244,15 @@ mod tests {
                     }
                     std::thread::sleep(Duration::from_millis(5));
                 }
-                assert!(independent,"statuses: {:?}", app.world_mut().query::<&crate::velocity_controller::VelocityControlState>().iter(app.world()).map(|c|c.runtime.autonomy_json.clone()).collect::<Vec<_>>());
+                assert!(
+                    independent,
+                    "statuses: {:?}",
+                    app.world_mut()
+                        .query::<&crate::velocity_controller::VelocityControlState>()
+                        .iter(app.world())
+                        .map(|c| c.runtime.autonomy_json.clone())
+                        .collect::<Vec<_>>()
+                );
             }
         }
         client.close().wait().unwrap();
@@ -2332,8 +2594,7 @@ fn drive_autonomy(
             rt.outdoor.invalidate_sensors();
         }
         if let Some(mut queue) = actions.remove(&id.0) {
-            for (kind, payload, received) in
-                crate::control_queue::drain_control_actions(&mut queue)
+            for (kind, payload, received) in crate::control_queue::drain_control_actions(&mut queue)
             {
                 if kind == "hardware" {
                     apply_hardware_command(
@@ -2346,9 +2607,10 @@ fn drive_autonomy(
                 }
                 if kind == "mission/report" {
                     if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&payload)
-                        && let Some(target) = v["survivor_id"].as_u64() {
-                            runtime.mission.report(id.0, target, now);
-                        }
+                        && let Some(target) = v["survivor_id"].as_u64()
+                    {
+                        runtime.mission.report(id.0, target, now);
+                    }
                     continue;
                 }
                 let _ = rt.ingest(terra_runtime::RuntimeEvent::Remote {
@@ -2517,20 +2779,17 @@ fn drive_autonomy(
                 );
             }
             for (kind, value) in [
-                (
-                    "hardware/status",
-                    {
-                        let mut status = crate::control_queue::simulated_relay_status(
-                            &runtime.run_id,
-                            connected && tracked.armed,
-                            !hold
-                                && !output.reset_controller
-                                && (motor.left != 0.0 || motor.right != 0.0),
-                        );
-                        status["armed"] = serde_json::json!(tracked.armed);
-                        status
-                    },
-                ),
+                ("hardware/status", {
+                    let mut status = crate::control_queue::simulated_relay_status(
+                        &runtime.run_id,
+                        connected && tracked.armed,
+                        !hold
+                            && !output.reset_controller
+                            && (motor.left != 0.0 || motor.right != 0.0),
+                    );
+                    status["armed"] = serde_json::json!(tracked.armed);
+                    status
+                }),
                 ("autonomy/status", {
                     let mut value = serde_json::to_value(&output.status).unwrap();
                     value["navigation"] = runtime_status["navigation"].clone();
@@ -2615,7 +2874,8 @@ mod autonomy_integration_tests {
     use super::*;
     #[test]
     fn settings_observe_the_preceding_motor_output() {
-        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        let lobby =
+            crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
         match lobby.mode {
             crate::lobby::Mode::Open => info!(
                 "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
@@ -2632,9 +2892,8 @@ mod autonomy_integration_tests {
         });
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .insert_resource(Bridge {
-                shared: shared.clone(),
-            })
+            .insert_resource(Bridge::detached(shared.clone()))
+            .add_systems(Startup, host_room_from_env)
             .add_systems(FixedUpdate, drive_autonomy);
         let rt = terra_runtime::Runtime::new(Default::default(), "test".into()).unwrap();
         let mut control = crate::velocity_controller::VelocityControlState::new(rt);
@@ -2665,7 +2924,8 @@ mod autonomy_integration_tests {
     }
     #[test]
     fn runtime_selects_teleop_and_latches_stop_per_rover() {
-        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        let lobby =
+            crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
         match lobby.mode {
             crate::lobby::Mode::Open => info!(
                 "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
@@ -2683,9 +2943,8 @@ mod autonomy_integration_tests {
         shared.connected.store(true, Ordering::Release);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .insert_resource(Bridge {
-                shared: shared.clone(),
-            })
+            .insert_resource(Bridge::detached(shared.clone()))
+            .add_systems(Startup, host_room_from_env)
             .add_systems(FixedUpdate, drive_autonomy);
         for id in [1, 2] {
             shared.commands.lock().unwrap().insert(id, None);
@@ -2782,7 +3041,8 @@ mod autonomy_integration_tests {
 
     #[test]
     fn a_bound_reset_clears_an_emergency_stop_and_teleop_drives_again() {
-        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        let lobby =
+            crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
         match lobby.mode {
             crate::lobby::Mode::Open => info!(
                 "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
@@ -2801,9 +3061,8 @@ mod autonomy_integration_tests {
         shared.commands.lock().unwrap().insert(1, None);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .insert_resource(Bridge {
-                shared: shared.clone(),
-            })
+            .insert_resource(Bridge::detached(shared.clone()))
+            .add_systems(Startup, host_room_from_env)
             .add_systems(FixedUpdate, drive_autonomy);
         let rt = terra_runtime::Runtime::new(
             terra_runtime::RuntimeConfig {
@@ -2875,7 +3134,8 @@ mod autonomy_integration_tests {
 
     #[test]
     fn hardware_disarm_holds_motion_until_a_fresh_arm() {
-        let lobby = crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
+        let lobby =
+            crate::lobby::LobbyConfig::from_env().expect("invalid multiplayer configuration");
         match lobby.mode {
             crate::lobby::Mode::Open => info!(
                 "Zorvane multiplayer: open (unclaimed rovers take any command). Host key: {}",
@@ -2893,9 +3153,8 @@ mod autonomy_integration_tests {
         shared.connected.store(true, Ordering::Release);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .insert_resource(Bridge {
-                shared: shared.clone(),
-            })
+            .insert_resource(Bridge::detached(shared.clone()))
+            .add_systems(Startup, host_room_from_env)
             .add_systems(FixedUpdate, drive_autonomy);
         shared.commands.lock().unwrap().insert(1, None);
         let rt = terra_runtime::Runtime::new(
