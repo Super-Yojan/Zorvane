@@ -34,6 +34,11 @@ TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447 ZORVANE_MATCH=seated ZORVANE_JOIN_CODE=field
 TERRA_ROVER_COUNT=4 cargo run --release -p zorvane
 ```
 
+In a windowed host the start menu has the same choices: set **Who can connect**
+to *Other computers too*, **Multiplayer** to *Seated* and **Join code** to *New
+code* (the code is shown on the button), then press Start. Zorvane relaunches
+with those settings.
+
 Or headless, as a dedicated server: add `TERRA_HEADLESS=1`, or use
 [`docker/Dockerfile`](../docker/Dockerfile), which already listens on
 `0.0.0.0:7447`. Open TCP 7447 in the host's firewall.
@@ -89,6 +94,21 @@ local endpoint, `tcp/127.0.0.1:7447`, which is every tool's default:
 | `--see own\|team\|all` | Rovers whose full state crosses the network. Pose and NEXT status of every rover always come. Default `team`. |
 | `--frames own\|see\|none` | Camera frames for own rovers, every rover in view, or none. Default `own`. |
 | `--user`, `--password`, `--tls-ca` | For a hosted Zenoh router (below). |
+
+## Spectators
+
+People who only watch need no seat. On the host's own screen, start Zorvane
+with `ZORVANE_SPECTATOR=1` (or press V) for a free camera that never drives;
+see the camera keys in [NEXT.md](NEXT.md). From another computer, run the relay
+in watch mode and point ARGOS at it:
+
+```sh
+python3 tools/zorvane_player.py --host tcp/192.168.1.20:7447 watch [--frames see]
+```
+
+It relays the state of every rover, takes no seat and drops every command, so
+a spectator cannot drive anyone's rover. FPV signaling still passes, so the
+spectator can open a rover's video. Camera frames stay off unless `--frames see`.
 
 `python3 tools/zorvane_player.py --host … status` prints `match/state` and five
 round trips without joining.

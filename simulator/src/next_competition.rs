@@ -201,8 +201,7 @@ impl Bucket {
 }
 
 pub fn bucket_seed() -> u64 {
-    std::env::var("TERRA_NEXT_SEED")
-        .ok()
+    crate::settings::env("TERRA_NEXT_SEED")
         .and_then(|value| value.parse().ok())
         .unwrap_or(DEFAULT_BUCKET_SEED)
 }
@@ -315,8 +314,7 @@ fn goal_line_xs(count: usize, spacing: f32, chassis_x: f32) -> Vec<f32> {
 /// as on a NEXT2026 practice field, on top of the 198 in the penalty boxes.
 /// More balls give object detection more examples per frame.
 pub fn extra_ball_count() -> usize {
-    std::env::var("TERRA_NEXT_BALLS")
-        .ok()
+    crate::settings::env("TERRA_NEXT_BALLS")
         .and_then(|value| value.parse().ok())
         .unwrap_or(0)
         .min(400)

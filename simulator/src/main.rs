@@ -15,6 +15,8 @@ mod physics;
 mod rgb_camera;
 mod robotics_pose;
 mod session;
+mod settings;
+mod spectator;
 mod terra;
 mod vehicle;
 mod velocity_controller;
@@ -46,6 +48,7 @@ fn packaged_assets() -> Option<String> {
 }
 
 fn main() {
+    settings::wait_for_listen_port();
     observability::initialize();
     observation_capture::initialize();
     // CrabTrapBot is the NEXT rover; ZORVANE_VEHICLE still chooses explicitly.

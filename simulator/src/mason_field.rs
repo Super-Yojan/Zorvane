@@ -118,11 +118,11 @@ pub enum Lighting {
 impl Lighting {
     /// `TERRA_NEXT_LIGHTING` = `noon` (default), `overcast` or `evening`.
     pub fn from_env() -> Result<Self, String> {
-        match std::env::var("TERRA_NEXT_LIGHTING").as_deref() {
-            Err(_) | Ok("") | Ok("noon") => Ok(Self::Noon),
-            Ok("overcast") => Ok(Self::Overcast),
-            Ok("evening") => Ok(Self::Evening),
-            Ok(other) => Err(format!(
+        match crate::settings::env("TERRA_NEXT_LIGHTING").as_deref() {
+            None | Some("") | Some("noon") => Ok(Self::Noon),
+            Some("overcast") => Ok(Self::Overcast),
+            Some("evening") => Ok(Self::Evening),
+            Some(other) => Err(format!(
                 "TERRA_NEXT_LIGHTING must be noon, overcast or evening, not {other:?}"
             )),
         }

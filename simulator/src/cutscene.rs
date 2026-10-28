@@ -180,9 +180,8 @@ struct CutsceneVoice;
 struct IntroScript(Script);
 
 pub fn install(app: &mut App) {
-    let enabled = std::env::var("TERRA_HEADLESS").as_deref() != Ok("1")
-        && std::env::var("ZORVANE_CUTSCENE").as_deref() != Ok("0");
-    if !enabled {
+    // ZORVANE_CUTSCENE is checked per field, so the start menu can turn it off.
+    if std::env::var("TERRA_HEADLESS").as_deref() == Ok("1") {
         return;
     }
     let script: Script = serde_json::from_str(SCRIPT).expect("invalid NEXT intro script");
@@ -200,6 +199,7 @@ fn start(
     playing: Option<Res<Playing>>,
 ) {
     if new_field.is_empty()
+        || crate::settings::env("ZORVANE_CUTSCENE").as_deref() == Some("0")
         || playing.is_some()
         || cameras.is_empty()
         || config.is_none()
