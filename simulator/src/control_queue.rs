@@ -93,6 +93,7 @@ pub fn enqueue_control_action<T>(
             | "search"
             | "search/action"
             | "search/report/ack"
+            | "dock"
     ) {
         return;
     }

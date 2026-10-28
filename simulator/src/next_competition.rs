@@ -1225,13 +1225,18 @@ fn at_home_goal(slot: usize, position: Vec3, chassis: Vec3) -> bool {
     position.x.abs() <= GOAL_WIDTH * 0.5 - chassis.x * 0.5 && (position.z - goal_z).abs() <= 1.0
 }
 
+/// Rover centre to the dumper outlet along the body when lined up over a bucket, metres.
+pub fn dumper_outlet_ahead(chassis: Vec3) -> f32 {
+    chassis.z * 0.5 + BUCKET_TOP_DIAMETER * 0.5 + DUMPER_OUTLET_CLEARANCE
+}
+
 fn dumper_outlet(position: Vec3, rotation: Quat, chassis: Vec3) -> Vec3 {
     position
         + rotation
             * Vec3::new(
                 0.0,
                 DUMPER_BALL_LOCAL_Y + 0.1,
-                -(chassis.z * 0.5 + BUCKET_TOP_DIAMETER * 0.5 + DUMPER_OUTLET_CLEARANCE),
+                -dumper_outlet_ahead(chassis),
             )
 }
 

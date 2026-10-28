@@ -81,6 +81,7 @@ fn mount_controllers(
     mut commands: Commands,
     config: Res<VelocitySimulationConfig>,
     drive: Res<DriveConfig>,
+    physics: Option<Res<crate::physics::RoverPhysicsConfig>>,
     rovers: Query<Entity, Added<Rover>>,
 ) {
     for entity in &rovers {
@@ -106,7 +107,8 @@ fn mount_controllers(
                     },
                     format!("sim-{}", entity.to_bits()),
                 )
-                .expect("invalid simulated runtime parameters"),
+                .expect("invalid simulated runtime parameters")
+                .with_dock_outlet(physics.as_deref()),
                 last_velocity: None,
                 last_vio: None,
                 output: MotorOutput::stopped(StopReason::SensorNotReady),
@@ -114,6 +116,23 @@ fn mount_controllers(
             ConstantForce::default(),
             ConstantTorque::default(),
         ));
+    }
+}
+/// Line the bucket dock up with the NEXT dumper outlet of this chassis.
+trait WithDockOutlet {
+    fn with_dock_outlet(self, physics: Option<&crate::physics::RoverPhysicsConfig>) -> Self;
+}
+impl WithDockOutlet for terra_runtime::Runtime {
+    fn with_dock_outlet(mut self, physics: Option<&crate::physics::RoverPhysicsConfig>) -> Self {
+        if let Some(physics) = physics {
+            let mut dock = self.autonomy.dock_config().clone();
+            dock.outlet_ahead = f64::from(crate::next_competition::dumper_outlet_ahead(
+                physics.chassis_size,
+            ));
+            dock.blind_range = dock.outlet_ahead + 0.35;
+            self.autonomy.configure_dock(dock);
+        }
+        self
     }
 }
 fn world_vector(value: Vec3) -> Vector3 {

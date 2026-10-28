@@ -584,6 +584,7 @@ pub(crate) fn is_command_kind(kind: &str) -> bool {
                 | "search"
                 | "search/action"
                 | "search/report/ack"
+                | "dock"
         )
 }
 #[derive(Resource)]
@@ -2358,6 +2359,8 @@ struct AutonomousRover {
     near_miss: terra_experiment::NearMiss,
     contacts: std::collections::BTreeSet<Entity>,
     observed_area: terra_experiment::ObservedArea,
+    /// The bucket dock's gate request on the last tick, to dump once per opening.
+    gate_open: bool,
 }
 #[derive(Component, Default)]
 pub(crate) struct AutonomyMotorGate {
@@ -2550,6 +2553,7 @@ fn drive_autonomy(
                 near_miss: Default::default(),
                 contacts: Default::default(),
                 observed_area: Default::default(),
+                gate_open: false,
             });
         let pose = rt.pose.unwrap_or_default().0;
         let (x, y, _) = (pose.x, pose.y, pose.yaw);
@@ -2658,6 +2662,17 @@ fn drive_autonomy(
                 let _ = recorder.record(event);
             }
         }
+        // The dock's dump gate is the NEXT dumper: opening it is a DUMP press,
+        // through the same checks as the HUD button.
+        if output.gate_open && !tracked.gate_open {
+            bridge.shared.next_commands.lock().unwrap().push(
+                crate::next_competition::NextCommand {
+                    rover: id.0,
+                    kind: crate::next_competition::NextCommandKind::Dump,
+                },
+            );
+        }
+        tracked.gate_open = output.gate_open;
         bridge
             .shared
             .authorities
