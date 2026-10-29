@@ -385,8 +385,20 @@ pub fn online_clicks(
 
 /// Typing into the focused field. Tab moves on, Enter presses the screen's
 /// main button.
+/// Appends typed or pasted text, dropping control characters, up to 128 bytes.
+fn push_text(value: &mut String, text: &str) {
+    for c in text.chars().filter(|c| !c.is_control()) {
+        if value.len() + c.len_utf8() > 128 {
+            break;
+        }
+        value.push(c);
+    }
+}
+
 pub fn type_text(
     mut keys: MessageReader<KeyboardInput>,
+    held: Res<ButtonInput<KeyCode>>,
+    mut clipboard: Option<ResMut<bevy::clipboard::Clipboard>>,
     mut menu: ResMut<OnlineMenu>,
     buttons: Query<(Entity, &OnlineButton)>,
     mut interactions: Query<&mut Interaction>,
@@ -397,18 +409,37 @@ pub fn type_text(
     };
     let mut changed = false;
     let mut submit = false;
+    // Cmd on macOS, Ctrl elsewhere.
+    let shortcut = held.any_pressed([
+        KeyCode::SuperLeft,
+        KeyCode::SuperRight,
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+    ]);
     for key in keys.read() {
         if !key.state.is_pressed() {
             continue;
         }
         match &key.logical_key {
-            Key::Character(text) => {
-                let value = menu.field_mut(focus);
-                for c in text.chars().filter(|c| !c.is_control()) {
-                    if value.len() < 128 {
-                        value.push(c);
-                    }
+            Key::Character(text) if shortcut => {
+                if text.eq_ignore_ascii_case("v")
+                    && let Some(Ok(pasted)) =
+                        clipboard.as_mut().and_then(|c| c.fetch_text().poll_result())
+                {
+                    push_text(menu.field_mut(focus), pasted.trim());
+                    changed = true;
                 }
+            }
+            Key::Paste => {
+                if let Some(Ok(pasted)) =
+                    clipboard.as_mut().and_then(|c| c.fetch_text().poll_result())
+                {
+                    push_text(menu.field_mut(focus), pasted.trim());
+                    changed = true;
+                }
+            }
+            Key::Character(text) => {
+                push_text(menu.field_mut(focus), text);
                 changed = true;
             }
             Key::Space => {
