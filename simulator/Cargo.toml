@@ -25,7 +25,8 @@ terra-types.workspace = true
 terra-state.workspace = true
 terra-control.workspace = true
 terra-waypoint.workspace = true
-bevy = { version = "0.19.1", features = ["bevy_scene", "bevy_gltf"] }
+# system_clipboard: paste into the online menu's text fields.
+bevy = { version = "0.19.1", features = ["bevy_scene", "bevy_gltf", "system_clipboard"] }
 avian3d = { git = "https://github.com/avianphysics/avian", rev = "af7e99c5c1da386aaa2b4c330e2adc96fa7ca6eb" }
 fastrand = "2.3"
 zenoh = { version = "1.10.1", default-features = false, features = ["auth_usrpwd", "transport_tcp", "transport_tls"] }
